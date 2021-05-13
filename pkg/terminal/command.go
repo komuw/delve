@@ -28,6 +28,7 @@ import (
 	"github.com/go-delve/delve/service"
 	"github.com/go-delve/delve/service/api"
 	"github.com/go-delve/delve/service/rpc2"
+	"github.com/sanity-io/litter"
 )
 
 const optimizedFunctionWarning = "Warning: debugging optimized function"
@@ -1824,10 +1825,14 @@ func printVar(t *Term, ctx callContext, args string) error {
 }
 
 func whatisCommand(t *Term, ctx callContext, args string) error {
+	fmt.Println("\n\n\t whatisCommand: ")
+	fmt.Println("ctx: ", ctx)
+	fmt.Println("args: ", args)
+	fmt.Printf("\n\n")
 	if len(args) == 0 {
 		return fmt.Errorf("not enough arguments")
 	}
-	val, err := t.client.EvalVariable(ctx.Scope, args, ShortLoadConfig)
+	val, err := t.client.EvalVariable(ctx.Scope, args, longLoadConfig)
 	if err != nil {
 		return err
 	}
@@ -1836,6 +1841,8 @@ func whatisCommand(t *Term, ctx callContext, args string) error {
 		return nil
 	}
 	if val.Type != "" {
+		litter.Dump("\n Komu val: ")
+		litter.Dump(val)
 		fmt.Println(val.Type)
 	}
 	if val.RealType != val.Type {

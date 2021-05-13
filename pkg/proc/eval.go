@@ -21,6 +21,7 @@ import (
 	"github.com/go-delve/delve/pkg/dwarf/op"
 	"github.com/go-delve/delve/pkg/dwarf/reader"
 	"github.com/go-delve/delve/pkg/goversion"
+	"github.com/sanity-io/litter"
 )
 
 var errOperationOnSpecialFloat = errors.New("operations on non-finite floats not implemented")
@@ -374,7 +375,10 @@ func (scope *EvalScope) setValue(dstv, srcv *Variable, srcExpr string) error {
 
 // EvalVariable returns the value of the given expression (backwards compatibility).
 func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, error) {
-	return scope.EvalExpression(name, cfg)
+	val, err := scope.EvalExpression(name, cfg)
+	fmt.Printf("\n\n\t pkg/proc/eval.go scope.EvalVariable \n\n")
+	litter.Dump(val)
+	return val, err
 }
 
 // SetVariable sets the value of the named variable
