@@ -378,6 +378,11 @@ func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, er
 	val, err := scope.EvalExpression(name, cfg)
 	fmt.Printf("\n\n\t pkg/proc/eval.go scope.EvalVariable \n\n")
 	litter.Dump(val)
+
+	vMeth, errF := val.findMethod("Hello")
+	fmt.Printf("\n\n\t vMeth, errF: %v, %v \n\n", vMeth, errF)
+	litter.Dump("scope.BinInfo.LookupFunc: ", scope.BinInfo.LookupFunc)
+
 	return val, err
 }
 
