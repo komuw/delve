@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 )
@@ -41,13 +42,14 @@ func (f *Fire) MethodTwo() int64 {
 go mod tidy
 make install
 /Users/komuw/go/bin/dlv debug example/main.go
-break example/main.go:63
+break example/main.go:70
 whatis d
-whatis f
+whatis f     // f is a value Type struct
+whatis hReq  // hReq is a pointer Type struct
 */
 func main() {
 	d := Distance(4.8)
-	f := Fire{
+	f := Fire{ // f is a value Type struct
 		HH:   Health{ID: 67, Date: time.Now()},
 		Age:  45,
 		Name: "Komu",
@@ -60,6 +62,12 @@ func main() {
 	f.MethodTwo()
 	_ = d.ToCm()
 
+	hReq, err := http.NewRequest("GET", "https://google.com", nil) // hReq is a pointer Type struct
+	if err != nil {
+		panic(fmt.Sprintf("http.NewRequest err: %v", err))
+	}
+
 	fmt.Println(f)
+	fmt.Println(hReq)
 	fmt.Println("hey")
 }

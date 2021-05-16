@@ -417,8 +417,10 @@ func getPubApi(v *Variable) {
 	}
 
 	getFields := func(v *Variable) (fields []string) {
-		switch t := v.RealType.(type) {
-		case *godwarf.StructType:
+		switch v.Kind {
+		case reflect.Struct:
+			// ie, v := T
+			t := v.RealType.(*godwarf.StructType)
 			for _, field := range t.Field {
 				// TODO: do we need to do something different for embedded fields?
 				// if field.Embedded {}
@@ -426,6 +428,20 @@ func getPubApi(v *Variable) {
 					fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
 				)
 
+			}
+		case reflect.Ptr:
+			// ie, v := &T
+			arg := v.maybeDereference()
+			t, ok := arg.RealType.(*godwarf.StructType)
+			if ok {
+				for _, field := range t.Field {
+					// TODO: do we need to do something different for embedded fields?
+					// if field.Embedded {}
+					fields = append(fields,
+						fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
+					)
+
+				}
 			}
 		}
 		return fields
