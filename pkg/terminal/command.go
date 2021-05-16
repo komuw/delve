@@ -28,7 +28,6 @@ import (
 	"github.com/go-delve/delve/service"
 	"github.com/go-delve/delve/service/api"
 	"github.com/go-delve/delve/service/rpc2"
-	"github.com/sanity-io/litter"
 )
 
 const optimizedFunctionWarning = "Warning: debugging optimized function"
@@ -1841,8 +1840,8 @@ func whatisCommand(t *Term, ctx callContext, args string) error {
 		return nil
 	}
 	if val.Type != "" {
-		litter.Dump("\n Komu val: ")
-		litter.Dump(val)
+		// litter.Dump("\n Komu val: ")
+		// litter.Dump(val)
 		fmt.Println(val.Type)
 	}
 	if val.RealType != val.Type {

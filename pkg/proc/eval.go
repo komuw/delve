@@ -373,17 +373,75 @@ func (scope *EvalScope) setValue(dstv, srcv *Variable, srcExpr string) error {
 	return fmt.Errorf("can not set variables of type %s (not implemented)", dstv.Kind.String())
 }
 
+// getPubApi returns the public API of the given variable
+func getPubApi(v *Variable) {
+	fmt.Printf("\n\n\t pkg/proc/eval.go komucool \n\n")
+	// litter.Dump(v)
+
+	getMethods := func(v *Variable) (methods []string) {
+		typ := v.DwarfType
+		ptyp, isptr := typ.(*godwarf.PtrType)
+		if isptr {
+			typ = ptyp.Type
+		}
+		typePath := typ.Common().Name
+		dot := strings.LastIndex(typePath, ".")
+		if dot < 0 {
+			// probably just a C type
+			// continue
+
+			// TODO: handle this case
+			_ = 8
+		}
+		pkg := typePath[:dot]
+		receiver := typePath[dot+1:]
+		valSearch := fmt.Sprintf("%s.%s.", pkg, receiver)
+		ptrSearch := fmt.Sprintf("%s.(*%s).", pkg, receiver)
+
+		for k, _ := range v.bi.LookupFunc {
+			if strings.HasPrefix(k, valSearch) || strings.HasPrefix(k, ptrSearch) {
+				// TODO: exclude private methods?
+				// TODO: if the method was not called before a breakpoint; then it is not availabe in `LookupFunc`
+
+				tmp := strings.Split(k, ".")
+				mname := tmp[len(tmp)-1]
+				rv, err := v.findMethod(mname)
+				if err != nil {
+					fmt.Println("findMethod error: ", err)
+				}
+				signature := rv.DwarfType.Common().Name
+				methods = append(methods, fmt.Sprintf("%s ::: %s", mname, signature))
+			}
+		}
+		return methods
+	}
+
+	getFields := func(v *Variable) (fields []string) {
+		switch t := v.RealType.(type) {
+		case *godwarf.StructType:
+			for _, field := range t.Field {
+				// TODO: do we need to do something different for embedded fields?
+				// if field.Embedded {}
+				fields = append(fields,
+					fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
+				)
+
+			}
+		}
+		return fields
+	}
+	methods := getMethods(v)
+	litter.Dump("methods: ", methods)
+
+	fields := getFields(v)
+	litter.Dump("fields: ", fields)
+}
+
 // EvalVariable returns the value of the given expression (backwards compatibility).
 func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, error) {
-	val, err := scope.EvalExpression(name, cfg)
-	fmt.Printf("\n\n\t pkg/proc/eval.go scope.EvalVariable \n\n")
-	litter.Dump(val)
-
-	vMeth, errF := val.findMethod("Hello")
-	fmt.Printf("\n\n\t vMeth, errF: %v, %v \n\n", vMeth, errF)
-	litter.Dump("scope.BinInfo.LookupFunc: ", scope.BinInfo.LookupFunc)
-
-	return val, err
+	v, err := scope.EvalExpression(name, cfg)
+	getPubApi(v)
+	return v, err
 }
 
 // SetVariable sets the value of the named variable
