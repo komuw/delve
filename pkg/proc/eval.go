@@ -373,6 +373,16 @@ func (scope *EvalScope) setValue(dstv, srcv *Variable, srcExpr string) error {
 	return fmt.Errorf("can not set variables of type %s (not implemented)", dstv.Kind.String())
 }
 
+// isPublic determines if a methodName or fieldName are part of public API
+func isPublic(mname string) bool {
+	c := mname[0]
+	if c >= 'A' && c <= 'Z' {
+		// TODO: check whether we need to handle non-ASCII
+		return true
+	}
+	return false
+}
+
 // getPubApi returns the public API of the given variable
 func getPubApi(v *Variable) {
 	fmt.Printf("\n\n\t pkg/proc/eval.go komucool \n\n")
@@ -405,12 +415,14 @@ func getPubApi(v *Variable) {
 
 				tmp := strings.Split(k, ".")
 				mname := tmp[len(tmp)-1]
-				rv, err := v.findMethod(mname)
-				if err != nil {
-					fmt.Println("findMethod error: ", err)
+				if isPublic(mname) {
+					rv, err := v.findMethod(mname)
+					if err != nil {
+						fmt.Println("findMethod error: ", err)
+					}
+					signature := rv.DwarfType.Common().Name
+					methods = append(methods, fmt.Sprintf("%s ::: %s", mname, signature))
 				}
-				signature := rv.DwarfType.Common().Name
-				methods = append(methods, fmt.Sprintf("%s ::: %s", mname, signature))
 			}
 		}
 		return methods
@@ -422,12 +434,11 @@ func getPubApi(v *Variable) {
 			// ie, v := T
 			t := v.RealType.(*godwarf.StructType)
 			for _, field := range t.Field {
-				// TODO: do we need to do something different for embedded fields?
-				// if field.Embedded {}
-				fields = append(fields,
-					fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
-				)
-
+				if isPublic(field.Name) {
+					fields = append(fields,
+						fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
+					)
+				}
 			}
 		case reflect.Ptr:
 			// ie, v := &T
@@ -435,12 +446,11 @@ func getPubApi(v *Variable) {
 			t, ok := arg.RealType.(*godwarf.StructType)
 			if ok {
 				for _, field := range t.Field {
-					// TODO: do we need to do something different for embedded fields?
-					// if field.Embedded {}
-					fields = append(fields,
-						fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
-					)
-
+					if isPublic(field.Name) {
+						fields = append(fields,
+							fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
+						)
+					}
 				}
 			}
 		}
