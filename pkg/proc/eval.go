@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/go-delve/delve/pkg/dwarf/godwarf"
 	"github.com/go-delve/delve/pkg/dwarf/op"
@@ -375,12 +376,7 @@ func (scope *EvalScope) setValue(dstv, srcv *Variable, srcExpr string) error {
 
 // isPublic determines if a methodName or fieldName are part of public API
 func isPublic(mname string) bool {
-	c := mname[0]
-	if c >= 'A' && c <= 'Z' {
-		// TODO: check whether we need to handle non-ASCII
-		return true
-	}
-	return false
+	return unicode.IsUpper(rune(mname[0]))
 }
 
 // getPubApi returns the public API of the given variable
