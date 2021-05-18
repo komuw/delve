@@ -236,7 +236,9 @@ See $GOPATH/src/github.com/go-delve/delve/Documentation/cli/expr.md for a descri
 The optional format argument is a format specifier, like the ones used by the fmt package. For example "print %x v" will print v as an hexadecimal number.`},
 		{aliases: []string{"whatis"}, group: dataCmds, cmdFn: whatisCommand, helpMsg: `Prints type of an expression.
 
-	whatis <expression>`},
+	whatis [-v] <expression>
+
+If -v is specified more information about each expression will be shown.`},
 		{aliases: []string{"set"}, group: dataCmds, cmdFn: setVar, helpMsg: `Changes the value of a variable.
 
 	[goroutine <n>] [frame <m>] set <variable> = <value>
@@ -1823,12 +1825,22 @@ func printVar(t *Term, ctx callContext, args string) error {
 	return nil
 }
 
-func whatisCommand(t *Term, ctx callContext, args string) error {
-	if len(args) == 0 {
+func whatisCommand(t *Term, ctx callContext, argstr string) error {
+	if len(argstr) == 0 {
 		return fmt.Errorf("not enough arguments")
 	}
 
-	val, err := t.client.EvalVariable(ctx.Scope, args, ShortLoadConfig)
+	args := split2PartsBySpace(argstr)
+	typ := args[0]
+	verbose := false
+	if args[0] == "-v" {
+		verbose = true
+		typ = args[1]
+	}
+	// TODO: utilize this verbose
+	_ = verbose
+
+	val, err := t.client.EvalVariable(ctx.Scope, typ, ShortLoadConfig)
 	if err != nil {
 		return err
 	}
