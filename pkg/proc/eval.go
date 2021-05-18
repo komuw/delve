@@ -394,10 +394,7 @@ func getPubApi(v *Variable) {
 		dot := strings.LastIndex(typePath, ".")
 		if dot < 0 {
 			// probably just a C type
-			// continue
-
-			// TODO: handle this case
-			_ = 8
+			return
 		}
 		pkg := typePath[:dot]
 		receiver := typePath[dot+1:]
