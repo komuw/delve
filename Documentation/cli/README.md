@@ -586,4 +586,4 @@ Prints type of an expression.
 
 	whatis <expression>
 
-
+If -v is specified more information about each expression will be shown.
