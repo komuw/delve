@@ -374,15 +374,16 @@ func (scope *EvalScope) setValue(dstv, srcv *Variable, srcExpr string) error {
 	return fmt.Errorf("can not set variables of type %s (not implemented)", dstv.Kind.String())
 }
 
-// isPublic determines if a methodName or fieldName are part of public API
-func isPublic(mname string) bool {
-	return unicode.IsUpper(rune(mname[0]))
-}
+// GetPubApi returns the public API of the given variable
+//
+// For this method to work, the binary should be compile with -ldflags='all=-linkshared'
+// so as to disable dead code elimination
+func GetPubApi(v *Variable) (methods []string, fields []string) {
 
-// getPubApi returns the public API of the given variable
-func getPubApi(v *Variable) {
-	fmt.Printf("\n\n\t pkg/proc/eval.go komucool \n\n")
-	// litter.Dump(v)
+	// isPublic determines if a methodName or fieldName are part of public API
+	isPublic := func(mname string) bool {
+		return unicode.IsUpper(rune(mname[0]))
+	}
 
 	getMethods := func(v *Variable) (methods []string) {
 		if v == nil {
@@ -407,9 +408,6 @@ func getPubApi(v *Variable) {
 
 		for k, _ := range v.bi.LookupFunc {
 			if strings.HasPrefix(k, valSearch) || strings.HasPrefix(k, ptrSearch) {
-				// TODO: exclude private methods?
-				// TODO: if the method was not called before a breakpoint; then it is not availabe in `LookupFunc`
-
 				tmp := strings.Split(k, ".")
 				mname := tmp[len(tmp)-1]
 				if isPublic(mname) {
@@ -437,7 +435,7 @@ func getPubApi(v *Variable) {
 			for _, field := range t.Field {
 				if isPublic(field.Name) {
 					fields = append(fields,
-						fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
+						fmt.Sprintf("%s %s", field.Name, field.Type.Common().Name),
 					)
 				}
 			}
@@ -449,7 +447,7 @@ func getPubApi(v *Variable) {
 				for _, field := range t.Field {
 					if isPublic(field.Name) {
 						fields = append(fields,
-							fmt.Sprintf("%s ::: %s", field.Name, field.Type.Common().Name),
+							fmt.Sprintf("%s %s", field.Name, field.Type.Common().Name),
 						)
 					}
 				}
@@ -457,18 +455,19 @@ func getPubApi(v *Variable) {
 		}
 		return fields
 	}
-	methods := getMethods(v)
-	litter.Dump("methods: ", methods)
 
-	fields := getFields(v)
-	litter.Dump("fields: ", fields)
+	return getMethods(v), getFields(v)
 }
 
 // EvalVariable returns the value of the given expression (backwards compatibility).
 func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, error) {
-	v, err := scope.EvalExpression(name, cfg)
-	getPubApi(v)
-	return v, err
+	val, err := scope.EvalExpression(name, cfg)
+
+	methods, fields := GetPubApi(val)
+	litter.Dump("methods: ", methods)
+	litter.Dump("fields: ", fields)
+
+	return val, err
 }
 
 // SetVariable sets the value of the named variable
