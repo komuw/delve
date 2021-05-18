@@ -22,7 +22,6 @@ import (
 	"github.com/go-delve/delve/pkg/dwarf/op"
 	"github.com/go-delve/delve/pkg/dwarf/reader"
 	"github.com/go-delve/delve/pkg/goversion"
-	"github.com/sanity-io/litter"
 )
 
 var errOperationOnSpecialFloat = errors.New("operations on non-finite floats not implemented")
@@ -459,13 +458,36 @@ func GetPubApi(v *Variable) (methods []string, fields []string) {
 	return getMethods(v), getFields(v)
 }
 
+func printVar(typ string, methods []string, fields []string) {
+	if methods == nil && fields == nil {
+		fmt.Println(typ)
+		return
+	}
+	pretty := fmt.Sprintf("%s {\n  fields:", typ)
+
+	for _, f := range fields {
+		pretty = pretty + "\n    " + f
+
+	}
+
+	pretty = pretty + "\n  methods:"
+	for _, m := range methods {
+		pretty = pretty + "\n    " + m
+
+	}
+	pretty = pretty + "\n}"
+
+	fmt.Println(pretty)
+}
+
 // EvalVariable returns the value of the given expression (backwards compatibility).
 func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, error) {
 	val, err := scope.EvalExpression(name, cfg)
 
 	methods, fields := GetPubApi(val)
-	litter.Dump("methods: ", methods)
-	litter.Dump("fields: ", fields)
+	if val != nil {
+		printVar(val.RealType.String(), methods, fields)
+	}
 
 	return val, err
 }
