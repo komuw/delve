@@ -416,7 +416,7 @@ func GetPubApi(v *Variable) (methods []string, fields []string) {
 						fmt.Println("findMethod error: ", err)
 					}
 					signature := rv.DwarfType.Common().Name
-					methods = append(methods, fmt.Sprintf("%s ::: %s", mname, signature))
+					methods = append(methods, fmt.Sprintf("%s %s", mname, signature))
 				}
 			}
 		}
