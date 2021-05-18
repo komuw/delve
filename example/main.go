@@ -49,7 +49,14 @@ make install
 go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go
 /go/bin/dlv exec example/example
 # dlv debug example/main.go # does not work. # we need to update the default debug command to include `-linkshared`
-break example/main.go:79
+
+rm -rf example/example && \
+go mod tidy && \
+make install && \
+go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go && \
+/go/bin/dlv exec example/example
+
+break example/main.go:86
 whatis d
 whatis f     // f is a value Type struct
 whatis hReq  // hReq is a pointer Type struct

@@ -385,6 +385,10 @@ func getPubApi(v *Variable) {
 	// litter.Dump(v)
 
 	getMethods := func(v *Variable) (methods []string) {
+		if v == nil {
+			return
+		}
+
 		typ := v.DwarfType
 		ptyp, isptr := typ.(*godwarf.PtrType)
 		if isptr {
@@ -422,6 +426,10 @@ func getPubApi(v *Variable) {
 	}
 
 	getFields := func(v *Variable) (fields []string) {
+		if v == nil {
+			return
+		}
+
 		switch v.Kind {
 		case reflect.Struct:
 			// ie, v := T
