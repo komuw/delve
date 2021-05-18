@@ -22,6 +22,12 @@ type Health struct {
 	Date time.Time
 }
 
+type Cooler struct{}
+
+func (d Cooler) Ala() float64 {
+	return 3.28084
+}
+
 type Fire struct {
 	HH        Health
 	Age       int64
@@ -56,7 +62,7 @@ make install && \
 go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go && \
 /go/bin/dlv exec example/example
 
-break example/main.go:86
+break example/main.go:93
 whatis d
 whatis f     // f is a value Type struct
 whatis hReq  // hReq is a pointer Type struct
@@ -77,6 +83,7 @@ func main() {
 	// f.MethodTwo()
 	// f.privMethod()
 	_ = d.ToCm()
+	cool := Cooler{}
 
 	hReq, err := http.NewRequest("GET", "https://google.com", nil) // hReq is a pointer Type struct
 	if err != nil {
@@ -85,5 +92,5 @@ func main() {
 
 	fmt.Println(f)
 	fmt.Println(hReq)
-	fmt.Println("hey")
+	fmt.Println("hey", cool)
 }

@@ -463,17 +463,21 @@ func printVar(typ string, methods []string, fields []string) {
 		fmt.Println(typ)
 		return
 	}
-	pretty := fmt.Sprintf("%s {\n  fields:", typ)
+	pretty := fmt.Sprintf("%s {", typ)
 
-	for _, f := range fields {
-		pretty = pretty + "\n    " + f
-
+	if fields != nil {
+		pretty = pretty + "\n  fields:"
+		for _, f := range fields {
+			pretty = pretty + "\n    " + f
+		}
 	}
 
-	pretty = pretty + "\n  methods:"
-	for _, m := range methods {
-		pretty = pretty + "\n    " + m
+	if methods != nil {
+		pretty = pretty + "\n  methods:"
+		for _, m := range methods {
+			pretty = pretty + "\n    " + m
 
+		}
 	}
 	pretty = pretty + "\n}"
 
