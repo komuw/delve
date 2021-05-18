@@ -584,6 +584,6 @@ If regex is specified only package variables with a name matching it will be ret
 ## whatis
 Prints type of an expression.
 
-	whatis <expression>
+	whatis [-v] <expression>
 
 If -v is specified more information about each expression will be shown.
