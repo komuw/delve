@@ -46,8 +46,10 @@ func (f Fire) privMethod() string {
 /*
 go mod tidy
 make install
-/Users/komuw/go/bin/dlv debug example/main.go
-break example/main.go:77
+go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go
+/go/bin/dlv exec example/example
+# dlv debug example/main.go # does not work. # we need to update the default debug command to include `-linkshared`
+break example/main.go:79
 whatis d
 whatis f     // f is a value Type struct
 whatis hReq  // hReq is a pointer Type struct
@@ -64,9 +66,9 @@ func main() {
 	// TODO: fix,
 	// If it is not called; then delve is not able to find it.
 	// eg: the `ToFeet` method of the type `Distance` is not found when you do `whatis d`
-	f.Hello(89)
-	f.MethodTwo()
-	f.privMethod()
+	// f.Hello(89)
+	// f.MethodTwo()
+	// f.privMethod()
 	_ = d.ToCm()
 
 	hReq, err := http.NewRequest("GET", "https://google.com", nil) // hReq is a pointer Type struct
