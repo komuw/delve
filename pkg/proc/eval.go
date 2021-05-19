@@ -502,7 +502,11 @@ func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, er
 
 	methods, fields := GetPubApi(val)
 	if val != nil {
-		printVar(val.RealType.String(), methods, fields)
+		typ := val.RealType.String()
+		if val.Kind == reflect.Interface && len(val.Children) > 0 {
+			typ = fmt.Sprintf("%s %s", val.Kind, val.Children[0].RealType.String())
+		}
+		printVar(typ, methods, fields)
 	}
 
 	return val, err
