@@ -470,7 +470,21 @@ func GetPubApi(v *Variable) (methods []string, fields []string) {
 	return getMethods(v), getFields(v)
 }
 
-func printVar(typ string, methods []string, fields []string) {
+func printVar(val *Variable, methods []string, fields []string) {
+	typ := val.RealType.String()
+	switch val.Kind {
+	case reflect.Interface:
+		if len(val.Children) > 0 {
+			typ = fmt.Sprintf("%s %s", val.Kind, val.Children[0].RealType.String())
+		}
+	case reflect.Ptr:
+		arg := val.maybeDereference()
+		t, ok := arg.RealType.(*godwarf.StructType)
+		if ok {
+			typ = fmt.Sprintf("%s *%s", t.Kind, t.StructName)
+		}
+	}
+
 	if methods == nil && fields == nil {
 		fmt.Println(typ)
 		return
@@ -504,21 +518,7 @@ func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, er
 	// It should only be called when `whatis -v <expression>` is used.
 	methods, fields := GetPubApi(val)
 	if val != nil {
-		typ := val.RealType.String()
-		switch val.Kind {
-		case reflect.Interface:
-			if len(val.Children) > 0 {
-				typ = fmt.Sprintf("%s %s", val.Kind, val.Children[0].RealType.String())
-			}
-		case reflect.Ptr:
-			arg := val.maybeDereference()
-			t, ok := arg.RealType.(*godwarf.StructType)
-			if ok {
-				typ = fmt.Sprintf("%s *%s", t.Kind, t.StructName)
-			}
-		}
-
-		printVar(typ, methods, fields)
+		printVar(val, methods, fields)
 	}
 
 	return val, err
