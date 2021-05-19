@@ -507,9 +507,9 @@ func printVar(val *Variable, methods []string, fields []string) {
 	}
 	pretty = pretty + "\n}"
 
-	fmt.Println("printVar:")
+	fmt.Println("\t ===printVar:===")
 	fmt.Println(pretty)
-	fmt.Println("printVar:")
+	fmt.Println("\t ===printVar:===")
 }
 
 // EvalVariable returns the value of the given expression (backwards compatibility).
