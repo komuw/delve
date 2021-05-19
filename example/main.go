@@ -73,7 +73,7 @@ make install && \
 go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go && \
 /go/bin/dlv exec example/example
 
-break example/main.go:112
+break example/main.go:124
 whatis d
 whatis f     // f is a value Type struct
 whatis hReq  // hReq is a pointer Type struct
@@ -94,7 +94,7 @@ func main() {
 	// f.MethodTwo()
 	// f.privMethod()
 	_ = d.ToCm()
-	cool := Cooler{}
+	cool := &Cooler{}
 
 	myFile, _ := os.Create("/tmp/cool.txt")
 	var inter MyInter = myFile
@@ -109,6 +109,18 @@ func main() {
 		panic(fmt.Sprintf("http.NewRequest err: %v", err))
 	}
 
+	// whatis d
+	// whatis Distance
+	// whatis f
+	// whatis cool
+	// whatis myFile
+	// whatis inter
+	// whatis MyInter
+	// whatis interTwo
+	// whatis MyFn
+	// whatis fn
+	// whatis err
+	// whatis hReq
 	fmt.Println(f)
 	fmt.Println(hReq)
 	fmt.Println("hey", cool, inter, interTwo, MyFn)
