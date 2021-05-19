@@ -500,6 +500,8 @@ func printVar(typ string, methods []string, fields []string) {
 func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, error) {
 	val, err := scope.EvalExpression(name, cfg)
 
+	// TODO: this gets called for both `whatis` command and `print` command.
+	// It should only be called when `whatis -v <expression>` is used.
 	methods, fields := GetPubApi(val)
 	if val != nil {
 		typ := val.RealType.String()
