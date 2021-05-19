@@ -505,9 +505,19 @@ func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, er
 	methods, fields := GetPubApi(val)
 	if val != nil {
 		typ := val.RealType.String()
-		if val.Kind == reflect.Interface && len(val.Children) > 0 {
-			typ = fmt.Sprintf("%s %s", val.Kind, val.Children[0].RealType.String())
+		switch val.Kind {
+		case reflect.Interface:
+			if len(val.Children) > 0 {
+				typ = fmt.Sprintf("%s %s", val.Kind, val.Children[0].RealType.String())
+			}
+		case reflect.Ptr:
+			arg := val.maybeDereference()
+			t, ok := arg.RealType.(*godwarf.StructType)
+			if ok {
+				typ = fmt.Sprintf("%s *%s", t.Kind, t.StructName)
+			}
 		}
+
 		printVar(typ, methods, fields)
 	}
 
