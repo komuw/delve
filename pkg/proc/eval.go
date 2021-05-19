@@ -471,6 +471,10 @@ func GetPubApi(v *Variable) (methods []string, fields []string) {
 }
 
 func printPubApi(val *Variable, methods []string, fields []string) {
+	if val == nil {
+		return
+	}
+
 	typ := val.RealType.String()
 	switch val.Kind {
 	case reflect.Interface:
@@ -519,9 +523,7 @@ func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, er
 	// TODO: this gets called for both `whatis` command and `print` command.
 	// It should only be called when `whatis -v <expression>` is used.
 	methods, fields := GetPubApi(val)
-	if val != nil {
-		printPubApi(val, methods, fields)
-	}
+	printPubApi(val, methods, fields)
 
 	return val, err
 }
