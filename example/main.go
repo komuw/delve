@@ -73,7 +73,7 @@ make install && \
 go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go && \
 /go/bin/dlv exec example/example
 
-break example/main.go:124
+break example/main.go:130
 whatis d
 whatis f     // f is a value Type struct
 whatis hReq  // hReq is a pointer Type struct
@@ -109,6 +109,10 @@ func main() {
 		panic(fmt.Sprintf("http.NewRequest err: %v", err))
 	}
 
+	myChan := make(chan int64)
+	bufmyChan := make(chan Distance, 2)
+	bufmyChan <- d
+
 	// whatis d
 	// whatis Distance
 	// whatis f
@@ -121,7 +125,9 @@ func main() {
 	// whatis fn
 	// whatis err
 	// whatis hReq
+	// whatis myChan
+	// whatis bufmyChan
 	fmt.Println(f)
 	fmt.Println(hReq)
-	fmt.Println("hey", cool, inter, interTwo, MyFn)
+	fmt.Println("hey", cool, inter, interTwo, MyFn, myChan, bufmyChan)
 }
