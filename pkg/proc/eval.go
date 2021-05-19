@@ -384,6 +384,16 @@ func GetPubApi(v *Variable) (methods []string, fields []string) {
 		return unicode.IsUpper(rune(mname[0]))
 	}
 
+	// contains tells whether a contains x.
+	contains := func(a []string, x string) bool {
+		for _, n := range a {
+			if x == n {
+				return true
+			}
+		}
+		return false
+	}
+
 	getMethods := func(v *Variable) (methods []string) {
 		if v == nil {
 			return
@@ -414,8 +424,10 @@ func GetPubApi(v *Variable) (methods []string, fields []string) {
 					if err != nil {
 						fmt.Println("findMethod error: ", err)
 					}
-					signature := rv.DwarfType.Common().Name
-					methods = append(methods, fmt.Sprintf("%s %s", mname, signature))
+					signature := fmt.Sprintf("%s %s", mname, rv.DwarfType.Common().Name)
+					if !contains(methods, signature) {
+						methods = append(methods, signature)
+					}
 				}
 			}
 		}

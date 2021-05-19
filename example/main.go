@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
@@ -49,6 +50,16 @@ func (f Fire) privMethod() string {
 	return "A private Method"
 }
 
+type MyInter interface {
+	Read(p []byte) (n int, err error)
+}
+
+type fn func(x int, y string) uint64
+
+func (f fn) MethodOnFunc() int64 {
+	return 3465
+}
+
 /*
 go mod tidy
 make install
@@ -62,7 +73,7 @@ make install && \
 go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go && \
 /go/bin/dlv exec example/example
 
-break example/main.go:93
+break example/main.go:112
 whatis d
 whatis f     // f is a value Type struct
 whatis hReq  // hReq is a pointer Type struct
@@ -85,6 +96,14 @@ func main() {
 	_ = d.ToCm()
 	cool := Cooler{}
 
+	myFile, _ := os.Create("/tmp/cool.txt")
+	var inter MyInter = myFile
+	var interTwo MyInter = nil
+
+	var MyFn fn = func(x int, y string) uint64 {
+		return 56
+	}
+
 	hReq, err := http.NewRequest("GET", "https://google.com", nil) // hReq is a pointer Type struct
 	if err != nil {
 		panic(fmt.Sprintf("http.NewRequest err: %v", err))
@@ -92,5 +111,5 @@ func main() {
 
 	fmt.Println(f)
 	fmt.Println(hReq)
-	fmt.Println("hey", cool)
+	fmt.Println("hey", cool, inter, interTwo, MyFn)
 }
