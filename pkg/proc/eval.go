@@ -475,7 +475,11 @@ func printVar(val *Variable, methods []string, fields []string) {
 	switch val.Kind {
 	case reflect.Interface:
 		if len(val.Children) > 0 {
-			typ = fmt.Sprintf("%s %s", val.Kind, val.Children[0].RealType.String())
+			s := val.Children[0].RealType.String()
+			if s == "void" {
+				s = val.RealType.String()
+			}
+			typ = fmt.Sprintf("%s %s", val.Kind, s)
 		}
 	case reflect.Ptr:
 		arg := val.maybeDereference()
@@ -485,10 +489,6 @@ func printVar(val *Variable, methods []string, fields []string) {
 		}
 	}
 
-	if methods == nil && fields == nil {
-		fmt.Println(typ)
-		return
-	}
 	pretty := fmt.Sprintf("%s {", typ)
 
 	if fields != nil {
@@ -507,7 +507,9 @@ func printVar(val *Variable, methods []string, fields []string) {
 	}
 	pretty = pretty + "\n}"
 
+	fmt.Println("printVar:")
 	fmt.Println(pretty)
+	fmt.Println("printVar:")
 }
 
 // EvalVariable returns the value of the given expression (backwards compatibility).
