@@ -190,17 +190,15 @@ const (
 // G represents a runtime G (goroutine) structure (at least the
 // fields that Delve is interested in).
 type G struct {
-	ID        int    // Goroutine ID
-	PC        uint64 // PC of goroutine when it was parked.
-	SP        uint64 // SP of goroutine when it was parked.
-	BP        uint64 // BP of goroutine when it was parked (go >= 1.7).
-	LR        uint64 // LR of goroutine when it was parked.
-	GoPC      uint64 // PC of 'go' statement that created this goroutine.
-	StartPC   uint64 // PC of the first function run on this goroutine.
-	Status    uint64
-	stkbarVar *Variable // stkbar field of g struct
-	stkbarPos int       // stkbarPos field of g struct
-	stack     stack     // value of stack
+	ID      int    // Goroutine ID
+	PC      uint64 // PC of goroutine when it was parked.
+	SP      uint64 // SP of goroutine when it was parked.
+	BP      uint64 // BP of goroutine when it was parked (go >= 1.7).
+	LR      uint64 // LR of goroutine when it was parked.
+	GoPC    uint64 // PC of 'go' statement that created this goroutine.
+	StartPC uint64 // PC of the first function run on this goroutine.
+	Status  uint64
+	stack   stack // value of stack
 
 	WaitSince  int64
 	WaitReason int64
@@ -518,9 +516,28 @@ func (g *G) Go() Location {
 }
 
 // StartLoc returns the starting location of the goroutine.
-func (g *G) StartLoc() Location {
-	f, l, fn := g.variable.bi.PCToLine(g.StartPC)
-	return Location{PC: g.StartPC, File: f, Line: l, Fn: fn}
+func (g *G) StartLoc(tgt *Target) Location {
+	fn := g.variable.bi.PCToFunc(g.StartPC)
+	fn = tgt.dwrapUnwrap(fn)
+	if fn == nil {
+		return Location{PC: g.StartPC}
+	}
+	f, l := fn.cu.lineInfo.PCToLine(fn.Entry, fn.Entry)
+	return Location{PC: fn.Entry, File: f, Line: l, Fn: fn}
+}
+
+// System returns true if g is a system goroutine. See isSystemGoroutine in
+// $GOROOT/src/runtime/traceback.go.
+func (g *G) System(tgt *Target) bool {
+	loc := g.StartLoc(tgt)
+	if loc.Fn == nil {
+		return false
+	}
+	switch loc.Fn.Name {
+	case "runtime.main", "runtime.handleAsyncEvent", "runtime.runfinq":
+		return false
+	}
+	return strings.HasPrefix(loc.Fn.Name, "runtime.")
 }
 
 func (g *G) Labels() map[string]string {
@@ -875,13 +892,6 @@ func (v *Variable) parseG() (*G, error) {
 		}
 	}
 
-	stkbarVar := v.loadFieldNamed("stkbar")
-	stkbarVarPosFld := v.loadFieldNamed("stkbarPos")
-	var stkbarPos int64
-	if stkbarVarPosFld != nil { // stack barriers were removed in Go 1.9
-		stkbarPos, _ = constant.Int64Val(stkbarVarPosFld.Value)
-	}
-
 	status := loadInt64Maybe("atomicstatus")
 
 	if unreadable {
@@ -905,8 +915,6 @@ func (v *Variable) parseG() (*G, error) {
 		WaitReason: waitReason,
 		CurrentLoc: Location{PC: uint64(pc), File: f, Line: l, Fn: fn},
 		variable:   v,
-		stkbarVar:  stkbarVar,
-		stkbarPos:  int(stkbarPos),
 		stack:      stack{hi: stackhi, lo: stacklo},
 	}
 	return g, nil
@@ -1026,31 +1034,6 @@ func (a *Ancestor) Stack(n int) ([]Stackframe, error) {
 	return r, nil
 }
 
-// Returns the list of saved return addresses used by stack barriers
-func (g *G) stkbar() ([]savedLR, error) {
-	if g.stkbarVar == nil { // stack barriers were removed in Go 1.9
-		return nil, nil
-	}
-	g.stkbarVar.loadValue(LoadConfig{false, 1, 0, int(g.stkbarVar.Len), 3, 0})
-	if g.stkbarVar.Unreadable != nil {
-		return nil, fmt.Errorf("unreadable stkbar: %v", g.stkbarVar.Unreadable)
-	}
-	r := make([]savedLR, len(g.stkbarVar.Children))
-	for i, child := range g.stkbarVar.Children {
-		for _, field := range child.Children {
-			switch field.Name {
-			case "savedLRPtr":
-				ptr, _ := constant.Int64Val(field.Value)
-				r[i].ptr = uint64(ptr)
-			case "savedLRVal":
-				val, _ := constant.Int64Val(field.Value)
-				r[i].val = uint64(val)
-			}
-		}
-	}
-	return r, nil
-}
-
 func (v *Variable) structMember(memberName string) (*Variable, error) {
 	if v.Unreadable != nil {
 		return v.clone(), nil
@@ -1147,7 +1130,7 @@ func readVarEntry(entry *godwarf.Tree, image *Image) (name string, typ godwarf.T
 
 // Extracts the name and type of a variable from a dwarf entry
 // then executes the instructions given in the  DW_AT_location attribute to grab the variable's address
-func extractVarInfoFromEntry(bi *BinaryInfo, image *Image, regs op.DwarfRegisters, mem MemoryReadWriter, entry *godwarf.Tree) (*Variable, error) {
+func extractVarInfoFromEntry(tgt *Target, bi *BinaryInfo, image *Image, regs op.DwarfRegisters, mem MemoryReadWriter, entry *godwarf.Tree) (*Variable, error) {
 	if entry.Tag != dwarf.TagFormalParameter && entry.Tag != dwarf.TagVariable {
 		return nil, fmt.Errorf("invalid entry tag, only supports FormalParameter and Variable, got %s", entry.Tag.String())
 	}
@@ -1159,9 +1142,16 @@ func extractVarInfoFromEntry(bi *BinaryInfo, image *Image, regs op.DwarfRegister
 
 	addr, pieces, descr, err := bi.Location(entry, dwarf.AttrLocation, regs.PC(), regs)
 	if pieces != nil {
-		addr = fakeAddress
 		var cmem *compositeMemory
-		cmem, err = newCompositeMemory(mem, bi.Arch, regs, pieces)
+		if tgt != nil {
+			addr, cmem, err = tgt.newCompositeMemory(mem, regs, pieces, descr)
+		} else {
+			cmem, err = newCompositeMemory(mem, bi.Arch, regs, pieces)
+			if cmem != nil {
+				cmem.base = fakeAddressUnresolv
+				addr = int64(cmem.base)
+			}
+		}
 		if cmem != nil {
 			mem = cmem
 		}
@@ -1268,7 +1258,7 @@ func (v *Variable) loadValueInternal(recurseLevel int, cfg LoadConfig) {
 
 		case v.Flags&VariableCPURegister != 0:
 			val = fmt.Sprintf("%x", v.reg.Bytes)
-			s := v.Base - fakeAddress
+			s := v.Base - fakeAddressUnresolv
 			if s < uint64(len(val)) {
 				val = val[s:]
 				if v.Len >= 0 && v.Len < int64(len(val)) {
@@ -2318,6 +2308,7 @@ func (v *Variable) registerVariableTypeConv(newtyp string) (*Variable, error) {
 	v.loaded = true
 	v.Kind = reflect.Array
 	v.Len = int64(len(v.Children))
+	v.Base = fakeAddressUnresolv
 	v.DwarfType = fakeArrayType(uint64(len(v.Children)), &godwarf.VoidType{CommonType: godwarf.CommonType{ByteSize: int64(n)}})
 	v.RealType = v.DwarfType
 	return v, nil

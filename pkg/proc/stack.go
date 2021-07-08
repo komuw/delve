@@ -102,18 +102,13 @@ func ThreadStacktrace(thread Thread, depth int) ([]Stackframe, error) {
 		so := thread.BinInfo().PCToImage(regs.PC())
 		dwarfRegs := *(thread.BinInfo().Arch.RegistersToDwarfRegisters(so.StaticBase, regs))
 		dwarfRegs.ChangeFunc = thread.SetReg
-		it := newStackIterator(thread.BinInfo(), thread.ProcessMemory(), dwarfRegs, 0, nil, -1, nil, 0)
+		it := newStackIterator(thread.BinInfo(), thread.ProcessMemory(), dwarfRegs, 0, nil, 0)
 		return it.stacktrace(depth)
 	}
 	return g.Stacktrace(depth, 0)
 }
 
 func (g *G) stackIterator(opts StacktraceOptions) (*stackIterator, error) {
-	stkbar, err := g.stkbar()
-	if err != nil {
-		return nil, err
-	}
-
 	bi := g.variable.bi
 	if g.Thread != nil {
 		regs, err := g.Thread.Registers()
@@ -126,13 +121,13 @@ func (g *G) stackIterator(opts StacktraceOptions) (*stackIterator, error) {
 		return newStackIterator(
 			bi, g.variable.mem,
 			dwarfRegs,
-			g.stack.hi, stkbar, g.stkbarPos, g, opts), nil
+			g.stack.hi, g, opts), nil
 	}
 	so := g.variable.bi.PCToImage(g.PC)
 	return newStackIterator(
 		bi, g.variable.mem,
 		bi.Arch.addrAndStackRegsToDwarfRegisters(so.StaticBase, g.PC, g.SP, g.BP, g.LR),
-		g.stack.hi, stkbar, g.stkbarPos, g, opts), nil
+		g.stack.hi, g, opts), nil
 }
 
 type StacktraceOptions uint16
@@ -187,10 +182,8 @@ type stackIterator struct {
 	mem   MemoryReadWriter
 	err   error
 
-	stackhi        uint64
-	systemstack    bool
-	stackBarrierPC uint64
-	stkbar         []savedLR
+	stackhi     uint64
+	systemstack bool
 
 	// regs is the register set for the current frame
 	regs op.DwarfRegisters
@@ -202,36 +195,12 @@ type stackIterator struct {
 	opts StacktraceOptions
 }
 
-type savedLR struct {
-	ptr uint64
-	val uint64
-}
-
-func newStackIterator(bi *BinaryInfo, mem MemoryReadWriter, regs op.DwarfRegisters, stackhi uint64, stkbar []savedLR, stkbarPos int, g *G, opts StacktraceOptions) *stackIterator {
-	stackBarrierFunc := bi.LookupFunc["runtime.stackBarrier"] // stack barriers were removed in Go 1.9
-	var stackBarrierPC uint64
-	if stackBarrierFunc != nil && stkbar != nil {
-		stackBarrierPC = stackBarrierFunc.Entry
-		fn := bi.PCToFunc(regs.PC())
-		if fn != nil && fn.Name == "runtime.stackBarrier" {
-			// We caught the goroutine as it's executing the stack barrier, we must
-			// determine whether or not g.stackPos has already been incremented or not.
-			if len(stkbar) > 0 && stkbar[stkbarPos].ptr < regs.SP() {
-				// runtime.stackBarrier has not incremented stkbarPos.
-			} else if stkbarPos > 0 && stkbar[stkbarPos-1].ptr < regs.SP() {
-				// runtime.stackBarrier has incremented stkbarPos.
-				stkbarPos--
-			} else {
-				return &stackIterator{err: fmt.Errorf("failed to unwind through stackBarrier at SP %x", regs.SP())}
-			}
-		}
-		stkbar = stkbar[stkbarPos:]
-	}
+func newStackIterator(bi *BinaryInfo, mem MemoryReadWriter, regs op.DwarfRegisters, stackhi uint64, g *G, opts StacktraceOptions) *stackIterator {
 	systemstack := true
 	if g != nil {
 		systemstack = g.SystemStack
 	}
-	return &stackIterator{pc: regs.PC(), regs: regs, top: true, bi: bi, mem: mem, err: nil, atend: false, stackhi: stackhi, stackBarrierPC: stackBarrierPC, stkbar: stkbar, systemstack: systemstack, g: g, opts: opts}
+	return &stackIterator{pc: regs.PC(), regs: regs, top: true, bi: bi, mem: mem, err: nil, atend: false, stackhi: stackhi, systemstack: systemstack, g: g, opts: opts}
 }
 
 // Next points the iterator to the next stack frame.
@@ -242,12 +211,6 @@ func (it *stackIterator) Next() bool {
 
 	callFrameRegs, ret, retaddr := it.advanceRegs()
 	it.frame = it.newStackframe(ret, retaddr)
-
-	if it.stkbar != nil && it.frame.Ret == it.stackBarrierPC && it.frame.addrret == it.stkbar[0].ptr {
-		// Skip stack barrier frames
-		it.frame.Ret = it.stkbar[0].val
-		it.stkbar = it.stkbar[1:]
-	}
 
 	if it.opts&StacktraceSimple == 0 {
 		if it.bi.Arch.switchStack(it, &callFrameRegs) {
@@ -556,11 +519,11 @@ func (it *stackIterator) loadG0SchedSP() {
 
 // Defer represents one deferred call
 type Defer struct {
-	DeferredPC uint64 // Value of field _defer.fn.fn, the deferred function
-	DeferPC    uint64 // PC address of instruction that added this defer
-	SP         uint64 // Value of SP register when this function was deferred (this field gets adjusted when the stack is moved to match the new stack space)
-	link       *Defer // Next deferred function
-	argSz      int64
+	DwrapPC uint64 // Value of field _defer.fn.fn, the deferred function or a wrapper to it in Go 1.17 or later
+	DeferPC uint64 // PC address of instruction that added this defer
+	SP      uint64 // Value of SP register when this function was deferred (this field gets adjusted when the stack is moved to match the new stack space)
+	link    *Defer // Next deferred function
+	argSz   int64
 
 	variable   *Variable
 	Unreadable error
@@ -621,7 +584,7 @@ func (d *Defer) load() {
 	if fnvar.Addr != 0 {
 		fnvar = fnvar.loadFieldNamed("fn")
 		if fnvar.Unreadable == nil {
-			d.DeferredPC, _ = constant.Uint64Val(fnvar.Value)
+			d.DwrapPC, _ = constant.Uint64Val(fnvar.Value)
 		}
 	}
 
@@ -657,18 +620,18 @@ func (d *Defer) Next() *Defer {
 // EvalScope returns an EvalScope relative to the argument frame of this deferred call.
 // The argument frame of a deferred call is stored in memory immediately
 // after the deferred header.
-func (d *Defer) EvalScope(thread Thread) (*EvalScope, error) {
-	scope, err := GoroutineScope(thread)
+func (d *Defer) EvalScope(t *Target, thread Thread) (*EvalScope, error) {
+	scope, err := GoroutineScope(t, thread)
 	if err != nil {
 		return nil, fmt.Errorf("could not get scope: %v", err)
 	}
 
 	bi := thread.BinInfo()
-	scope.PC = d.DeferredPC
-	scope.File, scope.Line, scope.Fn = bi.PCToLine(d.DeferredPC)
+	scope.PC = d.DwrapPC
+	scope.File, scope.Line, scope.Fn = bi.PCToLine(d.DwrapPC)
 
 	if scope.Fn == nil {
-		return nil, fmt.Errorf("could not find function at %#x", d.DeferredPC)
+		return nil, fmt.Errorf("could not find function at %#x", d.DwrapPC)
 	}
 
 	// The arguments are stored immediately after the defer header struct, i.e.
@@ -700,4 +663,17 @@ func (d *Defer) EvalScope(thread Thread) (*EvalScope, error) {
 	scope.Mem = cacheMemory(scope.Mem, uint64(scope.Regs.CFA), int(d.argSz))
 
 	return scope, nil
+}
+
+// DeferredFunc returns the deferred function, on Go 1.17 and later unwraps
+// any defer wrapper.
+func (d *Defer) DeferredFunc(p *Target) (file string, line int, fn *Function) {
+	bi := p.BinInfo()
+	fn = bi.PCToFunc(d.DwrapPC)
+	fn = p.dwrapUnwrap(fn)
+	if fn == nil {
+		return "", 0, nil
+	}
+	file, line = fn.cu.lineInfo.PCToLine(fn.Entry, fn.Entry)
+	return file, line, fn
 }

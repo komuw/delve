@@ -66,6 +66,8 @@ type Client interface {
 	GetBreakpointByName(name string) (*api.Breakpoint, error)
 	// CreateBreakpoint creates a new breakpoint.
 	CreateBreakpoint(*api.Breakpoint) (*api.Breakpoint, error)
+	// CreateWatchpoint creates a new watchpoint.
+	CreateWatchpoint(api.EvalScope, string, api.WatchType) (*api.Breakpoint, error)
 	// ListBreakpoints gets all breakpoints.
 	ListBreakpoints() ([]*api.Breakpoint, error)
 	// ClearBreakpoint deletes a breakpoint by ID.
@@ -112,6 +114,8 @@ type Client interface {
 
 	// ListGoroutines lists all goroutines.
 	ListGoroutines(start, count int) ([]*api.Goroutine, int, error)
+	// ListGoroutinesWithFilter lists goroutines matching the filters
+	ListGoroutinesWithFilter(start, count int, filters []api.ListGoroutinesFilter, group *api.GoroutineGroupingOptions) ([]*api.Goroutine, []api.GoroutineGroup, int, bool, error)
 
 	// Returns stacktrace
 	Stacktrace(goroutineID int, depth int, opts api.StacktraceOptions, cfg *api.LoadConfig) ([]api.Stackframe, error)

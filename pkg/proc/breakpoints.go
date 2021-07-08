@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/parser"
+	"go/token"
 	"reflect"
 )
 
@@ -35,6 +36,7 @@ type Breakpoint struct {
 	Name         string // User defined name of the breakpoint
 	LogicalID    int    // ID of the logical breakpoint that owns this physical breakpoint
 
+	WatchExpr    string
 	WatchType    WatchType
 	HWBreakIndex uint8 // hardware breakpoint index
 
@@ -70,6 +72,12 @@ type Breakpoint struct {
 	Cond ast.Expr
 	// internalCond is the same as Cond but used for the condition of internal breakpoints
 	internalCond ast.Expr
+	// HitCond: if not nil the breakpoint will be triggered only if the evaluated HitCond returns
+	// true with the TotalHitCount.
+	HitCond *struct {
+		Op  token.Token
+		Val int
+	}
 
 	// ReturnInfo describes how to collect return variables when this
 	// breakpoint is hit as a return breakpoint.
@@ -163,40 +171,93 @@ type returnBreakpointInfo struct {
 // CheckCondition evaluates bp's condition on thread.
 func (bp *Breakpoint) CheckCondition(thread Thread) BreakpointState {
 	bpstate := BreakpointState{Breakpoint: bp, Active: false, Internal: false, CondError: nil}
-	if bp.Cond == nil && bp.internalCond == nil {
-		bpstate.Active = true
-		bpstate.Internal = bp.IsInternal()
-		return bpstate
-	}
-	nextDeferOk := true
-	if bp.Kind&NextDeferBreakpoint != 0 {
-		var err error
-		frames, err := ThreadStacktrace(thread, 2)
-		if err == nil {
-			nextDeferOk = isPanicCall(frames)
-			if !nextDeferOk {
-				nextDeferOk, _ = isDeferReturnCall(frames, bp.DeferReturns)
-			}
+	bpstate.checkCond(thread)
+	// Update the breakpoint hit counts.
+	if bpstate.Breakpoint != nil && bpstate.Active {
+		if g, err := GetG(thread); err == nil {
+			bpstate.HitCount[g.ID]++
 		}
+		bpstate.TotalHitCount++
 	}
-	if bp.IsInternal() {
-		// Check internalCondition if this is also an internal breakpoint
-		bpstate.Active, bpstate.CondError = evalBreakpointCondition(thread, bp.internalCond)
-		bpstate.Active = bpstate.Active && nextDeferOk
-		if bpstate.Active || bpstate.CondError != nil {
-			bpstate.Internal = true
-			return bpstate
-		}
-	}
-	if bp.IsUser() {
-		// Check normal condition if this is also a user breakpoint
-		bpstate.Active, bpstate.CondError = evalBreakpointCondition(thread, bp.Cond)
-	}
+	bpstate.checkHitCond(thread)
 	return bpstate
 }
 
-func isPanicCall(frames []Stackframe) bool {
-	return len(frames) >= 3 && frames[2].Current.Fn != nil && frames[2].Current.Fn.Name == "runtime.gopanic"
+func (bpstate *BreakpointState) checkCond(thread Thread) {
+	if bpstate.Cond == nil && bpstate.internalCond == nil {
+		bpstate.Active = true
+		bpstate.Internal = bpstate.IsInternal()
+		return
+	}
+	nextDeferOk := true
+	if bpstate.Kind&NextDeferBreakpoint != 0 {
+		var err error
+		frames, err := ThreadStacktrace(thread, 2)
+		if err == nil {
+			nextDeferOk, _ = isPanicCall(frames)
+			if !nextDeferOk {
+				nextDeferOk, _ = isDeferReturnCall(frames, bpstate.DeferReturns)
+			}
+		}
+	}
+	if bpstate.IsInternal() {
+		// Check internalCondition if this is also an internal breakpoint
+		bpstate.Active, bpstate.CondError = evalBreakpointCondition(thread, bpstate.internalCond)
+		bpstate.Active = bpstate.Active && nextDeferOk
+		if bpstate.Active || bpstate.CondError != nil {
+			bpstate.Internal = true
+			return
+		}
+	}
+	if bpstate.IsUser() {
+		// Check normal condition if this is also a user breakpoint
+		bpstate.Active, bpstate.CondError = evalBreakpointCondition(thread, bpstate.Cond)
+	}
+}
+
+// checkHitCond evaluates bp's hit condition on thread.
+func (bpstate *BreakpointState) checkHitCond(thread Thread) {
+	if bpstate.HitCond == nil || !bpstate.Active || bpstate.Internal {
+		return
+	}
+	// Evaluate the breakpoint condition.
+	switch bpstate.HitCond.Op {
+	case token.EQL:
+		bpstate.Active = int(bpstate.TotalHitCount) == bpstate.HitCond.Val
+	case token.NEQ:
+		bpstate.Active = int(bpstate.TotalHitCount) != bpstate.HitCond.Val
+	case token.GTR:
+		bpstate.Active = int(bpstate.TotalHitCount) > bpstate.HitCond.Val
+	case token.LSS:
+		bpstate.Active = int(bpstate.TotalHitCount) < bpstate.HitCond.Val
+	case token.GEQ:
+		bpstate.Active = int(bpstate.TotalHitCount) >= bpstate.HitCond.Val
+	case token.LEQ:
+		bpstate.Active = int(bpstate.TotalHitCount) <= bpstate.HitCond.Val
+	case token.REM:
+		bpstate.Active = int(bpstate.TotalHitCount)%bpstate.HitCond.Val == 0
+	}
+}
+
+func isPanicCall(frames []Stackframe) (bool, int) {
+	// In Go prior to 1.17 the call stack for a panic is:
+	//  0. deferred function call
+	//  1. runtime.callN
+	//  2. runtime.gopanic
+	// in Go after 1.17 it is either:
+	//  0. deferred function call
+	//  1. deferred call wrapper
+	//  2. runtime.gopanic
+	// or:
+	//  0. deferred function call
+	//  1. runtime.gopanic
+	if len(frames) >= 3 && frames[2].Current.Fn != nil && frames[2].Current.Fn.Name == "runtime.gopanic" {
+		return true, 2
+	}
+	if len(frames) >= 2 && frames[1].Current.Fn != nil && frames[1].Current.Fn.Name == "runtime.gopanic" {
+		return true, 1
+	}
+	return false, 0
 }
 
 func isDeferReturnCall(frames []Stackframe, deferReturns []uint64) (bool, uint64) {
@@ -228,9 +289,9 @@ func evalBreakpointCondition(thread Thread, cond ast.Expr) (bool, error) {
 	if cond == nil {
 		return true, nil
 	}
-	scope, err := GoroutineScope(thread)
+	scope, err := GoroutineScope(nil, thread)
 	if err != nil {
-		scope, err = ThreadScope(thread)
+		scope, err = ThreadScope(nil, thread)
 		if err != nil {
 			return true, err
 		}
@@ -316,7 +377,11 @@ func (t *Target) SetWatchpoint(scope *EvalScope, expr string, wtype WatchType, c
 		return nil, errors.New("can not watch stack allocated variable")
 	}
 
-	return t.setBreakpointInternal(xv.Addr, UserBreakpoint, wtype.withSize(uint8(sz)), cond)
+	bp, err := t.setBreakpointInternal(xv.Addr, UserBreakpoint, wtype.withSize(uint8(sz)), cond)
+	if bp != nil {
+		bp.WatchExpr = expr
+	}
+	return bp, err
 }
 
 func (t *Target) setBreakpointInternal(addr uint64, kind BreakpointKind, wtype WatchType, cond ast.Expr) (*Breakpoint, error) {
@@ -520,7 +585,7 @@ func configureReturnBreakpoint(bi *BinaryInfo, bp *Breakpoint, topframe *Stackfr
 	}
 }
 
-func (rbpi *returnBreakpointInfo) Collect(thread Thread) []*Variable {
+func (rbpi *returnBreakpointInfo) Collect(t *Target, thread Thread) []*Variable {
 	if rbpi == nil {
 		return nil
 	}
@@ -529,7 +594,7 @@ func (rbpi *returnBreakpointInfo) Collect(thread Thread) []*Variable {
 	if err != nil {
 		return returnInfoError("could not get g", err, thread.ProcessMemory())
 	}
-	scope, err := GoroutineScope(thread)
+	scope, err := GoroutineScope(t, thread)
 	if err != nil {
 		return returnInfoError("could not get scope", err, thread.ProcessMemory())
 	}

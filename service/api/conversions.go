@@ -33,6 +33,8 @@ func ConvertBreakpoint(bp *proc.Breakpoint) *Breakpoint {
 		Variables:     bp.Variables,
 		LoadArgs:      LoadConfigFromProc(bp.LoadArgs),
 		LoadLocals:    LoadConfigFromProc(bp.LoadLocals),
+		WatchExpr:     bp.WatchExpr,
+		WatchType:     WatchType(bp.WatchType),
 		TotalHitCount: bp.TotalHitCount,
 		Addrs:         []uint64{bp.Addr},
 	}
@@ -45,6 +47,9 @@ func ConvertBreakpoint(bp *proc.Breakpoint) *Breakpoint {
 	var buf bytes.Buffer
 	printer.Fprint(&buf, token.NewFileSet(), bp.Cond)
 	b.Cond = buf.String()
+	if bp.HitCond != nil {
+		b.HitCond = fmt.Sprintf("%s %d", bp.HitCond.Op.String(), bp.HitCond.Val)
+	}
 
 	return b
 }
@@ -279,7 +284,7 @@ func ConvertFunction(fn *proc.Function) *Function {
 }
 
 // ConvertGoroutine converts from proc.G to api.Goroutine.
-func ConvertGoroutine(g *proc.G) *Goroutine {
+func ConvertGoroutine(tgt *proc.Target, g *proc.G) *Goroutine {
 	th := g.Thread
 	tid := 0
 	if th != nil {
@@ -293,7 +298,7 @@ func ConvertGoroutine(g *proc.G) *Goroutine {
 		CurrentLoc:     ConvertLocation(g.CurrentLoc),
 		UserCurrentLoc: ConvertLocation(g.UserCurrent()),
 		GoStatementLoc: ConvertLocation(g.Go()),
-		StartLoc:       ConvertLocation(g.StartLoc()),
+		StartLoc:       ConvertLocation(g.StartLoc(tgt)),
 		ThreadID:       tid,
 		WaitSince:      g.WaitSince,
 		WaitReason:     g.WaitReason,
@@ -303,10 +308,10 @@ func ConvertGoroutine(g *proc.G) *Goroutine {
 }
 
 // ConvertGoroutines converts from []*proc.G to []*api.Goroutine.
-func ConvertGoroutines(gs []*proc.G) []*Goroutine {
+func ConvertGoroutines(tgt *proc.Target, gs []*proc.G) []*Goroutine {
 	goroutines := make([]*Goroutine, len(gs))
 	for i := range gs {
-		goroutines[i] = ConvertGoroutine(gs[i])
+		goroutines[i] = ConvertGoroutine(tgt, gs[i])
 	}
 	return goroutines
 }

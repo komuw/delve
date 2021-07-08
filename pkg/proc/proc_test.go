@@ -423,7 +423,7 @@ func testseq(program string, contFunc contFunc, testcases []nextTest, initialLoc
 	testseq2(t, program, initialLocation, seqTestcases)
 }
 
-const traceTestseq2 = false
+const traceTestseq2 = true
 
 func testseq2(t *testing.T, program string, initialLocation string, testcases []seqTest) {
 	testseq2Args(".", []string{}, 0, t, program, initialLocation, testcases)
@@ -1149,10 +1149,10 @@ func evalVariableOrError(p *proc.Target, symbol string) (*proc.Variable, error) 
 		var frame proc.Stackframe
 		frame, err = findFirstNonRuntimeFrame(p)
 		if err == nil {
-			scope = proc.FrameToScope(p.BinInfo(), p.Memory(), nil, frame)
+			scope = proc.FrameToScope(p, p.BinInfo(), p.Memory(), nil, frame)
 		}
 	} else {
-		scope, err = proc.GoroutineScope(p.CurrentThread())
+		scope, err = proc.GoroutineScope(p, p.CurrentThread())
 	}
 
 	if err != nil {
@@ -1172,7 +1172,7 @@ func evalVariable(p *proc.Target, t testing.TB, symbol string) *proc.Variable {
 }
 
 func setVariable(p *proc.Target, symbol, value string) error {
-	scope, err := proc.GoroutineScope(p.CurrentThread())
+	scope, err := proc.GoroutineScope(p, p.CurrentThread())
 	if err != nil {
 		return err
 	}
@@ -1278,13 +1278,13 @@ func TestFrameEvaluation(t *testing.T) {
 		found := make([]bool, 10)
 		for _, g := range gs {
 			frame := -1
-			frames, err := g.Stacktrace(10, 0)
+			frames, err := g.Stacktrace(40, 0)
 			if err != nil {
 				t.Logf("could not stacktrace goroutine %d: %v\n", g.ID, err)
 				continue
 			}
 			t.Logf("Goroutine %d %#v", g.ID, g.Thread)
-			logStacktrace(t, p.BinInfo(), frames)
+			logStacktrace(t, p, frames)
 			for i := range frames {
 				if frames[i].Call.Fn != nil && frames[i].Call.Fn.Name == "main.agoroutine" {
 					frame = i
@@ -1335,6 +1335,36 @@ func TestFrameEvaluation(t *testing.T) {
 	})
 }
 
+func TestThreadFrameEvaluation(t *testing.T) {
+	skipOn(t, "upstream issue - https://github.com/golang/go/issues/29322", "pie")
+	deadlockBp := proc.FatalThrow
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+		t.SkipNow()
+	}
+	withTestProcess("testdeadlock", t, func(p *proc.Target, fixture protest.Fixture) {
+		assertNoError(p.Continue(), t, "Continue()")
+
+		bp := p.CurrentThread().Breakpoint()
+		if bp.Breakpoint == nil || bp.Name != deadlockBp {
+			t.Fatalf("did not stop at deadlock breakpoint %v", bp)
+		}
+
+		// There is no selected goroutine during a deadlock, so the scope will
+		// be a thread scope.
+		scope, err := proc.ConvertEvalScope(p, 0, 0, 0)
+		assertNoError(err, t, "ConvertEvalScope() on frame 0")
+		_, err = scope.EvalVariable("s", normalLoadConfig)
+		if err == nil {
+			t.Errorf("expected error for EvalVariable(\"s\") on frame 0")
+		}
+
+		scope, err = proc.ConvertEvalScope(p, 0, 1, 0)
+		assertNoError(err, t, "ConvertEvalScope() on frame 1")
+		_, err = scope.EvalVariable("s", normalLoadConfig)
+		assertNoError(err, t, "EvalVariable(\"s\") on frame 1")
+	})
+}
+
 func TestPointerSetting(t *testing.T) {
 	withTestProcess("testvariables2", t, func(p *proc.Target, fixture protest.Fixture) {
 		assertNoError(p.Continue(), t, "Continue() returned an error")
@@ -1350,7 +1380,7 @@ func TestPointerSetting(t *testing.T) {
 		pval(1)
 
 		// change p1 to point to i2
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "Scope()")
 		i2addr, err := scope.EvalExpression("i2", normalLoadConfig)
 		assertNoError(err, t, "EvalExpression()")
@@ -1481,7 +1511,7 @@ func TestBreakpointCountsWithDetection(t *testing.T) {
 				if bp := th.Breakpoint(); bp.Breakpoint == nil {
 					continue
 				}
-				scope, err := proc.GoroutineScope(th)
+				scope, err := proc.GoroutineScope(p, th)
 				assertNoError(err, t, "Scope()")
 				v, err := scope.EvalVariable("i", normalLoadConfig)
 				assertNoError(err, t, "evalVariable")
@@ -1551,7 +1581,7 @@ func BenchmarkGoroutinesInfo(b *testing.B) {
 		assertNoError(p.Continue(), b, "Continue()")
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			p.ClearAllGCache()
+			p.ClearCaches()
 			_, _, err := proc.GoroutinesInfo(p, 0, 0)
 			assertNoError(err, b, "GoroutinesInfo")
 		}
@@ -1611,7 +1641,7 @@ func TestPointerLoops(t *testing.T) {
 func BenchmarkLocalVariables(b *testing.B) {
 	withTestProcess("testvariables", b, func(p *proc.Target, fixture protest.Fixture) {
 		assertNoError(p.Continue(), b, "Continue() returned an error")
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, b, "Scope()")
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -1681,6 +1711,78 @@ func TestCondBreakpointError(t *testing.T) {
 			if n != 7 {
 				t.Fatalf("Stoppend on wrong goroutine %d\n", n)
 			}
+		}
+	})
+}
+
+func TestHitCondBreakpointEQ(t *testing.T) {
+	withTestProcess("break", t, func(p *proc.Target, fixture protest.Fixture) {
+		bp := setFileBreakpoint(p, t, fixture.Source, 7)
+		bp.HitCond = &struct {
+			Op  token.Token
+			Val int
+		}{token.EQL, 3}
+
+		assertNoError(p.Continue(), t, "Continue()")
+		ivar := evalVariable(p, t, "i")
+
+		i, _ := constant.Int64Val(ivar.Value)
+		if i != 3 {
+			t.Fatalf("Stoppend on wrong hitcount %d\n", i)
+		}
+
+		err := p.Continue()
+		if _, exited := err.(proc.ErrProcessExited); !exited {
+			t.Fatalf("Unexpected error on Continue(): %v", err)
+		}
+	})
+}
+
+func TestHitCondBreakpointGEQ(t *testing.T) {
+	protest.AllowRecording(t)
+	withTestProcess("break", t, func(p *proc.Target, fixture protest.Fixture) {
+		bp := setFileBreakpoint(p, t, fixture.Source, 7)
+		bp.HitCond = &struct {
+			Op  token.Token
+			Val int
+		}{token.GEQ, 3}
+
+		for it := 3; it <= 10; it++ {
+			assertNoError(p.Continue(), t, "Continue()")
+			ivar := evalVariable(p, t, "i")
+
+			i, _ := constant.Int64Val(ivar.Value)
+			if int(i) != it {
+				t.Fatalf("Stoppend on wrong hitcount %d\n", i)
+			}
+		}
+
+		assertNoError(p.Continue(), t, "Continue()")
+	})
+}
+
+func TestHitCondBreakpointREM(t *testing.T) {
+	protest.AllowRecording(t)
+	withTestProcess("break", t, func(p *proc.Target, fixture protest.Fixture) {
+		bp := setFileBreakpoint(p, t, fixture.Source, 7)
+		bp.HitCond = &struct {
+			Op  token.Token
+			Val int
+		}{token.REM, 2}
+
+		for it := 2; it <= 10; it += 2 {
+			assertNoError(p.Continue(), t, "Continue()")
+			ivar := evalVariable(p, t, "i")
+
+			i, _ := constant.Int64Val(ivar.Value)
+			if int(i) != it {
+				t.Fatalf("Stoppend on wrong hitcount %d\n", i)
+			}
+		}
+
+		err := p.Continue()
+		if _, exited := err.(proc.ErrProcessExited); !exited {
+			t.Fatalf("Unexpected error on Continue(): %v", err)
 		}
 	})
 }
@@ -1828,7 +1930,7 @@ func TestPackageVariables(t *testing.T) {
 	withTestProcess("testvariables", t, func(p *proc.Target, fixture protest.Fixture) {
 		err := p.Continue()
 		assertNoError(err, t, "Continue()")
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "Scope()")
 		vars, err := scope.PackageVariables(normalLoadConfig)
 		assertNoError(err, t, "PackageVariables()")
@@ -2143,7 +2245,7 @@ func TestStepCall(t *testing.T) {
 func TestStepCallPtr(t *testing.T) {
 	// Tests that Step works correctly when calling functions with a
 	// function pointer.
-	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) && !(goversion.VersionAfterOrEqual(runtime.Version(), 1, 17) && (runtime.GOARCH == "amd64")) {
 		testseq("teststepprog", contStep, []nextTest{
 			{9, 10},
 			{10, 6},
@@ -2233,6 +2335,19 @@ func TestStepIgnorePrivateRuntime(t *testing.T) {
 	// Tests that Step will ignore calls to private runtime functions
 	// (such as runtime.convT2E in this case)
 	switch {
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 17) && (runtime.GOARCH == "amd64"):
+		testseq("teststepprog", contStep, []nextTest{
+			{21, 13},
+			{13, 14},
+			{14, 15},
+			{15, 17},
+			{17, 22}}, "", t)
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 17):
+		testseq("teststepprog", contStep, []nextTest{
+			{21, 14},
+			{14, 15},
+			{15, 17},
+			{17, 22}}, "", t)
 	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 11):
 		testseq("teststepprog", contStep, []nextTest{
 			{21, 14},
@@ -2496,7 +2611,7 @@ func TestStepOnCallPtrInstr(t *testing.T) {
 
 		assertNoError(p.Step(), t, "Step()")
 
-		if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+		if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) && !(goversion.VersionAfterOrEqual(runtime.Version(), 1, 17) && (runtime.GOARCH == "amd64")) {
 			assertLineNumber(p, t, 6, "Step continued to wrong line,")
 		} else {
 			assertLineNumber(p, t, 5, "Step continued to wrong line,")
@@ -2626,7 +2741,7 @@ func BenchmarkTrace(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			assertNoError(p.Continue(), b, "Continue()")
-			s, err := proc.GoroutineScope(p.CurrentThread())
+			s, err := proc.GoroutineScope(p, p.CurrentThread())
 			assertNoError(err, b, "Scope()")
 			_, err = s.FunctionArguments(proc.LoadConfig{false, 0, 64, 0, 3, 0})
 			assertNoError(err, b, "FunctionArguments()")
@@ -2668,104 +2783,6 @@ func getg(goid int, gs []*proc.G) *proc.G {
 		}
 	}
 	return nil
-}
-
-func TestStacktraceWithBarriers(t *testing.T) {
-	// Go's Garbage Collector will insert stack barriers into stacks.
-	// This stack barrier is inserted by overwriting the return address for the
-	// stack frame with the address of runtime.stackBarrier.
-	// The original return address is saved into the stkbar slice inside the G
-	// struct.
-
-	// In Go 1.9 stack barriers have been removed and this test must be disabled.
-	if ver, _ := goversion.Parse(runtime.Version()); ver.Major < 0 || ver.AfterOrEqual(goversion.GoVersion{Major: 1, Minor: 9, Rev: -1}) {
-		return
-	}
-
-	// In Go 1.8 stack barriers are not inserted by default, this enables them.
-	godebugOld := os.Getenv("GODEBUG")
-	defer os.Setenv("GODEBUG", godebugOld)
-	os.Setenv("GODEBUG", "gcrescanstacks=1")
-
-	withTestProcess("binarytrees", t, func(p *proc.Target, fixture protest.Fixture) {
-		// We want to get a user goroutine with a stack barrier, to get that we execute the program until runtime.gcInstallStackBarrier is executed AND the goroutine it was executed onto contains a call to main.bottomUpTree
-		setFunctionBreakpoint(p, t, "runtime.gcInstallStackBarrier")
-		stackBarrierGoids := []int{}
-		for len(stackBarrierGoids) == 0 {
-			err := p.Continue()
-			if _, exited := err.(proc.ErrProcessExited); exited {
-				t.Logf("Could not run test")
-				return
-			}
-			assertNoError(err, t, "Continue()")
-			gs, _, err := proc.GoroutinesInfo(p, 0, 0)
-			assertNoError(err, t, "GoroutinesInfo()")
-			for _, th := range p.ThreadList() {
-				if bp := th.Breakpoint(); bp.Breakpoint == nil {
-					continue
-				}
-
-				goidVar := evalVariable(p, t, "gp.goid")
-				goid, _ := constant.Int64Val(goidVar.Value)
-
-				if g := getg(int(goid), gs); g != nil {
-					stack, err := g.Stacktrace(50, 0)
-					assertNoError(err, t, fmt.Sprintf("Stacktrace(goroutine = %d)", goid))
-					for _, frame := range stack {
-						if frame.Current.Fn != nil && frame.Current.Fn.Name == "main.bottomUpTree" {
-							stackBarrierGoids = append(stackBarrierGoids, int(goid))
-							break
-						}
-					}
-				}
-			}
-		}
-
-		if len(stackBarrierGoids) == 0 {
-			t.Fatalf("Could not find a goroutine with stack barriers")
-		}
-
-		t.Logf("stack barrier goids: %v\n", stackBarrierGoids)
-
-		assertNoError(p.StepOut(), t, "StepOut()")
-
-		gs, _, err := proc.GoroutinesInfo(p, 0, 0)
-		assertNoError(err, t, "GoroutinesInfo()")
-
-		for _, goid := range stackBarrierGoids {
-			g := getg(goid, gs)
-
-			stack, err := g.Stacktrace(200, 0)
-			assertNoError(err, t, "Stacktrace()")
-
-			// Check that either main.main or main.main.func1 appear in the
-			// stacktrace of this goroutine, if we failed at resolving stack barriers
-			// correctly the stacktrace will be truncated and neither main.main or
-			// main.main.func1 will appear
-			found := false
-			for _, frame := range stack {
-				if frame.Current.Fn == nil {
-					continue
-				}
-				if name := frame.Current.Fn.Name; name == "main.main" || name == "main.main.func1" {
-					found = true
-				}
-			}
-
-			t.Logf("Stacktrace for %d:\n", goid)
-			for _, frame := range stack {
-				name := "<>"
-				if frame.Current.Fn != nil {
-					name = frame.Current.Fn.Name
-				}
-				t.Logf("\t%s [CFA: %x Ret: %x] at %s:%d", name, frame.Regs.CFA, frame.Ret, frame.Current.File, frame.Current.Line)
-			}
-
-			if !found {
-				t.Logf("Truncated stacktrace for %d\n", goid)
-			}
-		}
-	})
 }
 
 func TestAttachDetach(t *testing.T) {
@@ -2992,10 +3009,10 @@ func TestIssue871(t *testing.T) {
 			var frame proc.Stackframe
 			frame, err = findFirstNonRuntimeFrame(p)
 			if err == nil {
-				scope = proc.FrameToScope(p.BinInfo(), p.Memory(), nil, frame)
+				scope = proc.FrameToScope(p, p.BinInfo(), p.Memory(), nil, frame)
 			}
 		} else {
-			scope, err = proc.GoroutineScope(p.CurrentThread())
+			scope, err = proc.GoroutineScope(p, p.CurrentThread())
 		}
 		assertNoError(err, t, "scope")
 
@@ -3033,7 +3050,7 @@ func TestShadowedFlag(t *testing.T) {
 	}
 	withTestProcess("testshadow", t, func(p *proc.Target, fixture protest.Fixture) {
 		assertNoError(p.Continue(), t, "Continue")
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "GoroutineScope")
 		locals, err := scope.LocalVariables(normalLoadConfig)
 		assertNoError(err, t, "LocalVariables")
@@ -3149,7 +3166,7 @@ func TestIssue844(t *testing.T) {
 	})
 }
 
-func logStacktrace(t *testing.T, bi *proc.BinaryInfo, frames []proc.Stackframe) {
+func logStacktrace(t *testing.T, p *proc.Target, frames []proc.Stackframe) {
 	for j := range frames {
 		name := "?"
 		if frames[j].Current.Fn != nil {
@@ -3161,20 +3178,20 @@ func logStacktrace(t *testing.T, bi *proc.BinaryInfo, frames []proc.Stackframe) 
 
 		t.Logf("\t%#x %#x %#x %s at %s:%d\n", frames[j].Call.PC, frames[j].FrameOffset(), frames[j].FramePointerOffset(), name, filepath.Base(frames[j].Call.File), frames[j].Call.Line)
 		if frames[j].TopmostDefer != nil {
-			f, l, fn := bi.PCToLine(frames[j].TopmostDefer.DeferredPC)
+			_, _, fn := frames[j].TopmostDefer.DeferredFunc(p)
 			fnname := ""
 			if fn != nil {
 				fnname = fn.Name
 			}
-			t.Logf("\t\ttopmost defer: %#x %s at %s:%d\n", frames[j].TopmostDefer.DeferredPC, fnname, f, l)
+			t.Logf("\t\ttopmost defer: %#x %s\n", frames[j].TopmostDefer.DwrapPC, fnname)
 		}
 		for deferIdx, _defer := range frames[j].Defers {
-			f, l, fn := bi.PCToLine(_defer.DeferredPC)
+			_, _, fn := _defer.DeferredFunc(p)
 			fnname := ""
 			if fn != nil {
 				fnname = fn.Name
 			}
-			t.Logf("\t\t%d defer: %#x %s at %s:%d\n", deferIdx, _defer.DeferredPC, fnname, f, l)
+			t.Logf("\t\t%d defer: %#x %s\n", deferIdx, _defer.DwrapPC, fnname)
 
 		}
 	}
@@ -3226,7 +3243,7 @@ func stacktraceCheck(t *testing.T, tc []string, frames []proc.Stackframe) []int 
 
 func frameInFile(frame proc.Stackframe, file string) bool {
 	for _, loc := range []proc.Location{frame.Current, frame.Call} {
-		if !strings.HasSuffix(loc.File, "/"+file) && !strings.HasSuffix(loc.File, "\\"+file) {
+		if !strings.HasSuffix(loc.File, file) && !strings.HasSuffix(loc.File, "/"+file) && !strings.HasSuffix(loc.File, "\\"+file) {
 			return false
 		}
 		if loc.Line <= 0 {
@@ -3251,7 +3268,7 @@ func TestCgoStacktrace(t *testing.T) {
 	}
 
 	skipOn(t, "broken - cgo stacktraces", "386")
-	skipOn(t, "broken - cgo stacktraces", "arm64")
+	skipOn(t, "broken - cgo stacktraces", "linux", "arm64")
 	protest.MustHaveCgo(t)
 
 	// Tests that:
@@ -3295,7 +3312,7 @@ func TestCgoStacktrace(t *testing.T) {
 			assertNoError(err, t, fmt.Sprintf("Stacktrace at iteration step %d", itidx))
 
 			t.Logf("iteration step %d", itidx)
-			logStacktrace(t, p.BinInfo(), frames)
+			logStacktrace(t, p, frames)
 
 			m := stacktraceCheck(t, tc, frames)
 			mismatch := (m == nil)
@@ -3332,7 +3349,7 @@ func TestCgoStacktrace(t *testing.T) {
 					if frames[j].Current.File != threadFrames[j].Current.File || frames[j].Current.Line != threadFrames[j].Current.Line {
 						t.Logf("stack mismatch between goroutine stacktrace and thread stacktrace")
 						t.Logf("thread stacktrace:")
-						logStacktrace(t, p.BinInfo(), threadFrames)
+						logStacktrace(t, p, threadFrames)
 						mismatch = true
 						break
 					}
@@ -3364,7 +3381,7 @@ func TestCgoSources(t *testing.T) {
 		for _, needle := range []string{"main.go", "hello.c"} {
 			found := false
 			for _, k := range sources {
-				if strings.HasSuffix(k, "/"+needle) || strings.HasSuffix(k, "\\"+needle) {
+				if strings.HasSuffix(k, needle) || strings.HasSuffix(k, "/"+needle) || strings.HasSuffix(k, "\\"+needle) {
 					found = true
 					break
 				}
@@ -3386,7 +3403,7 @@ func TestSystemstackStacktrace(t *testing.T) {
 		assertNoError(err, t, "GetG")
 		frames, err := g.Stacktrace(100, 0)
 		assertNoError(err, t, "stacktrace")
-		logStacktrace(t, p.BinInfo(), frames)
+		logStacktrace(t, p, frames)
 		m := stacktraceCheck(t, []string{"!runtime.startpanic_m", "runtime.gopanic", "main.main"}, frames)
 		if m == nil {
 			t.Fatal("see previous loglines")
@@ -3419,7 +3436,7 @@ func TestSystemstackOnRuntimeNewstack(t *testing.T) {
 		}
 		frames, err := g.Stacktrace(100, 0)
 		assertNoError(err, t, "stacktrace")
-		logStacktrace(t, p.BinInfo(), frames)
+		logStacktrace(t, p, frames)
 		m := stacktraceCheck(t, []string{"!runtime.newstack", "main.main"}, frames)
 		if m == nil {
 			t.Fatal("see previous loglines")
@@ -3438,7 +3455,7 @@ func TestIssue1034(t *testing.T) {
 		assertNoError(p.Continue(), t, "Continue()")
 		frames, err := p.SelectedGoroutine().Stacktrace(10, 0)
 		assertNoError(err, t, "Stacktrace")
-		scope := proc.FrameToScope(p.BinInfo(), p.Memory(), nil, frames[2:]...)
+		scope := proc.FrameToScope(p, p.BinInfo(), p.Memory(), nil, frames[2:]...)
 		args, _ := scope.FunctionArguments(normalLoadConfig)
 		assertNoError(err, t, "FunctionArguments()")
 		if len(args) > 0 {
@@ -3472,7 +3489,7 @@ func testDeclLineCount(t *testing.T, p *proc.Target, lineno int, tgtvars []strin
 	sort.Strings(tgtvars)
 
 	assertLineNumber(p, t, lineno, "Program did not continue to correct next location")
-	scope, err := proc.GoroutineScope(p.CurrentThread())
+	scope, err := proc.GoroutineScope(p, p.CurrentThread())
 	assertNoError(err, t, fmt.Sprintf("GoroutineScope (:%d)", lineno))
 	vars, err := scope.Locals()
 	assertNoError(err, t, fmt.Sprintf("Locals (:%d)", lineno))
@@ -3890,7 +3907,7 @@ func TestIssue951(t *testing.T) {
 
 	withTestProcess("issue951", t, func(p *proc.Target, fixture protest.Fixture) {
 		assertNoError(p.Continue(), t, "Continue()")
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "GoroutineScope")
 		args, err := scope.FunctionArguments(normalLoadConfig)
 		assertNoError(err, t, "FunctionArguments")
@@ -3936,7 +3953,7 @@ func TestMapLoadConfigWithReslice(t *testing.T) {
 	withTestProcess("testvariables2", t, func(p *proc.Target, fixture protest.Fixture) {
 		zolotovLoadCfg := proc.LoadConfig{FollowPointers: true, MaxStructFields: -1, MaxVariableRecurse: 3, MaxStringLen: 10, MaxArrayValues: 10}
 		assertNoError(p.Continue(), t, "First Continue()")
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "GoroutineScope")
 		m1, err := scope.EvalExpression("m1", zolotovLoadCfg)
 		assertNoError(err, t, "EvalVariable")
@@ -4043,7 +4060,7 @@ func TestReadDefer(t *testing.T) {
 		frames, err := p.SelectedGoroutine().Stacktrace(10, proc.StacktraceReadDefers)
 		assertNoError(err, t, "Stacktrace")
 
-		logStacktrace(t, p.BinInfo(), frames)
+		logStacktrace(t, p, frames)
 
 		examples := []struct {
 			frameIdx     int
@@ -4069,9 +4086,9 @@ func TestReadDefer(t *testing.T) {
 			if d.Unreadable != nil {
 				t.Fatalf("expected %q as %s of frame %d, got unreadable defer: %v", tgt, deferName, frameIdx, d.Unreadable)
 			}
-			dfn := p.BinInfo().PCToFunc(d.DeferredPC)
+			_, _, dfn := d.DeferredFunc(p)
 			if dfn == nil {
-				t.Fatalf("expected %q as %s of frame %d, got %#x", tgt, deferName, frameIdx, d.DeferredPC)
+				t.Fatalf("expected %q as %s of frame %d, got %#x", tgt, deferName, frameIdx, d.DwrapPC)
 			}
 			if dfn.Name != tgt {
 				t.Fatalf("expected %q as %s of frame %d, got %q", tgt, deferName, frameIdx, dfn.Name)
@@ -4109,6 +4126,19 @@ func TestNextUnknownInstr(t *testing.T) {
 }
 
 func TestReadDeferArgs(t *testing.T) {
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 17) {
+		// When regabi is enabled in Go 1.17 and later, reading arguments of
+		// deferred functions becomes significantly more complicated because of
+		// the autogenerated code used to unpack the argument frame stored in
+		// runtime._defer into registers.
+		// We either need to know how to do the translation, implementing the ABI1
+		// rules in Delve, or have some assistence from the compiler (for example
+		// have the dwrap function contain entries for each of the captured
+		// variables with a location describing their offset from DX).
+		// Ultimately this feature is unimportant enough that we can leave it
+		// disabled for now.
+		t.Skip("unsupported")
+	}
 	var tests = []struct {
 		frame, deferCall int
 		a, b             int64
@@ -4124,8 +4154,12 @@ func TestReadDeferArgs(t *testing.T) {
 			scope, err := proc.ConvertEvalScope(p, -1, test.frame, test.deferCall)
 			assertNoError(err, t, fmt.Sprintf("ConvertEvalScope(-1, %d, %d)", test.frame, test.deferCall))
 
-			if scope.Fn.Name != "main.f2" {
-				t.Fatalf("expected function \"main.f2\" got %q", scope.Fn.Name)
+			if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 17) {
+				// In Go 1.17 deferred function calls can end up inside a wrapper, and
+				// the scope for this evaluation needs to be the wrapper.
+				if scope.Fn.Name != "main.f2" {
+					t.Fatalf("expected function \"main.f2\" got %q", scope.Fn.Name)
+				}
 			}
 
 			avar, err := scope.EvalVariable("a", normalLoadConfig)
@@ -4178,7 +4212,7 @@ func TestIssue1432(t *testing.T) {
 		svar := evalVariable(p, t, "s")
 		t.Logf("%#x", svar.Addr)
 
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "GoroutineScope()")
 
 		err = scope.SetVariable(fmt.Sprintf("(*\"main.s\")(%#x).i", svar.Addr), "10")
@@ -4340,7 +4374,7 @@ func TestAncestors(t *testing.T) {
 			astack, err := a.Stack(100)
 			assertNoError(err, t, fmt.Sprintf("Ancestor %d stack", i))
 			t.Logf("ancestor %d\n", i)
-			logStacktrace(t, p.BinInfo(), astack)
+			logStacktrace(t, p, astack)
 			for _, frame := range astack {
 				if frame.Current.Fn != nil && frame.Current.Fn.Name == "main.main" {
 					mainFound = true
@@ -4476,7 +4510,7 @@ func TestCgoStacktrace2(t *testing.T) {
 		p.Continue()
 		frames, err := proc.ThreadStacktrace(p.CurrentThread(), 100)
 		assertNoError(err, t, "Stacktrace()")
-		logStacktrace(t, p.BinInfo(), frames)
+		logStacktrace(t, p, frames)
 		m := stacktraceCheck(t, []string{"C.sigsegv", "C.testfn", "main.main"}, frames)
 		if m == nil {
 			t.Fatal("see previous loglines")
@@ -4587,7 +4621,7 @@ func TestIssue1795(t *testing.T) {
 		assertNoError(p.Continue(), t, "Continue()")
 		frames, err := proc.ThreadStacktrace(p.CurrentThread(), 40)
 		assertNoError(err, t, "ThreadStacktrace()")
-		logStacktrace(t, p.BinInfo(), frames)
+		logStacktrace(t, p, frames)
 		if err := checkFrame(frames[0], "regexp.(*Regexp).doExecute", "", 0, false); err != nil {
 			t.Errorf("Wrong frame 0: %v", err)
 		}
@@ -5080,8 +5114,8 @@ func TestDump(t *testing.T) {
 					t.Errorf("Frame mismatch %d.%d\nlive:\t%s\ncore:\t%s", gos[i].ID, j, convertFrame(p.BinInfo().Arch, &frames[j]), convertFrame(p.BinInfo().Arch, &cframes[j]))
 				}
 				if frames[j].Call.Fn != nil && frames[j].Call.Fn.Name == "main.main" {
-					scope = proc.FrameToScope(p.BinInfo(), p.Memory(), gos[i], frames[j:]...)
-					cscope = proc.FrameToScope(c.BinInfo(), c.Memory(), cgos[i], cframes[j:]...)
+					scope = proc.FrameToScope(p, p.BinInfo(), p.Memory(), gos[i], frames[j:]...)
+					cscope = proc.FrameToScope(c, c.BinInfo(), c.Memory(), cgos[i], cframes[j:]...)
 				}
 			}
 		}
@@ -5158,9 +5192,11 @@ func TestCompositeMemoryWrite(t *testing.T) {
 			return regs.PC(), rax, xmm1
 		}
 
+		const fakeAddress = 0xbeef0000
+
 		getmem := func(mem proc.MemoryReader) uint64 {
 			buf := make([]byte, 8)
-			_, err := mem.ReadMemory(buf, 0xbeef0000)
+			_, err := mem.ReadMemory(buf, fakeAddress)
 			assertNoError(err, t, "ReadMemory")
 			return binary.LittleEndian.Uint64(buf)
 		}
@@ -5169,9 +5205,9 @@ func TestCompositeMemoryWrite(t *testing.T) {
 		oldPc, oldRax, oldXmm1 := getregs()
 		t.Logf("PC %#x AX %#x XMM1 %#x", oldPc, oldRax, oldXmm1)
 
-		memRax, err := proc.NewCompositeMemory(p, []op.Piece{{Size: 0, RegNum: 0, IsRegister: true}})
+		memRax, err := proc.NewCompositeMemory(p, []op.Piece{{Size: 0, Val: 0, Kind: op.RegPiece}}, fakeAddress)
 		assertNoError(err, t, "NewCompositeMemory (rax)")
-		memXmm1, err := proc.NewCompositeMemory(p, []op.Piece{{Size: 0, RegNum: 18, IsRegister: true}})
+		memXmm1, err := proc.NewCompositeMemory(p, []op.Piece{{Size: 0, Val: 18, Kind: op.RegPiece}}, fakeAddress)
 		assertNoError(err, t, "NewCompositeMemory (xmm1)")
 
 		if memRax := getmem(memRax); memRax != oldRax {
@@ -5230,7 +5266,7 @@ func TestWatchpointsBasic(t *testing.T) {
 		assertNoError(p.Continue(), t, "Continue 0")
 		assertLineNumber(p, t, 11, "Continue 0") // Position 0
 
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "GoroutineScope")
 
 		bp, err := p.SetWatchpoint(scope, "globalvar1", proc.WatchWrite, nil)
@@ -5276,7 +5312,7 @@ func TestWatchpointCounts(t *testing.T) {
 		setFunctionBreakpoint(p, t, "main.main")
 		assertNoError(p.Continue(), t, "Continue 0")
 
-		scope, err := proc.GoroutineScope(p.CurrentThread())
+		scope, err := proc.GoroutineScope(p, p.CurrentThread())
 		assertNoError(err, t, "GoroutineScope")
 
 		bp, err := p.SetWatchpoint(scope, "globalvar1", proc.WatchWrite, nil)
@@ -5304,6 +5340,79 @@ func TestWatchpointCounts(t *testing.T) {
 			if v != 100 {
 				t.Fatalf("Wrong HitCount for breakpoint (%v)", bp.HitCount)
 			}
+		}
+	})
+}
+
+func TestManualStopWhileStopped(t *testing.T) {
+	// Checks that RequestManualStop sent to a stopped thread does not cause the target process to die.
+	withTestProcess("loopprog", t, func(p *proc.Target, fixture protest.Fixture) {
+		asyncCont := func(done chan struct{}) {
+			defer close(done)
+			err := p.Continue()
+			t.Logf("%v\n", err)
+			if err != nil {
+				panic(err)
+			}
+			for _, th := range p.ThreadList() {
+				if th.Breakpoint().Breakpoint != nil {
+					t.Logf("unexpected stop at breakpoint: %v", th.Breakpoint().Breakpoint)
+					panic("unexpected stop at breakpoint")
+				}
+			}
+		}
+
+		const (
+			repeatsSlow = 3
+			repeatsFast = 5
+		)
+
+		for i := 0; i < repeatsSlow; i++ {
+			t.Logf("Continue %d (slow)", i)
+			done := make(chan struct{})
+			go asyncCont(done)
+			time.Sleep(1 * time.Second)
+			p.RequestManualStop()
+			time.Sleep(1 * time.Second)
+			p.RequestManualStop()
+			time.Sleep(1 * time.Second)
+			<-done
+		}
+		for i := 0; i < repeatsFast; i++ {
+			t.Logf("Continue %d (fast)", i)
+			rch := make(chan struct{})
+			done := make(chan struct{})
+			p.ResumeNotify(rch)
+			go asyncCont(done)
+			<-rch
+			p.RequestManualStop()
+			p.RequestManualStop()
+			<-done
+		}
+	})
+}
+
+func TestDwrapStartLocation(t *testing.T) {
+	// Tests that the start location of a goroutine is unwrapped in Go 1.17 and later.
+	withTestProcess("goroutinestackprog", t, func(p *proc.Target, fixture protest.Fixture) {
+		setFunctionBreakpoint(p, t, "main.stacktraceme")
+		assertNoError(p.Continue(), t, "Continue()")
+		gs, _, err := proc.GoroutinesInfo(p, 0, 0)
+		assertNoError(err, t, "GoroutinesInfo")
+		found := false
+		for _, g := range gs {
+			startLoc := g.StartLoc(p)
+			if startLoc.Fn == nil {
+				continue
+			}
+			t.Logf("%#v\n", startLoc.Fn.Name)
+			if startLoc.Fn.Name == "main.agoroutine" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("could not find any goroutine with a start location of main.agoroutine")
 		}
 	})
 }

@@ -130,6 +130,21 @@ See also: "help on", "help cond" and "help clear"`},
 A tracepoint is a breakpoint that does not stop the execution of the program, instead when the tracepoint is hit a notification is displayed. See $GOPATH/src/github.com/go-delve/delve/Documentation/cli/locspec.md for the syntax of linespec.
 
 See also: "help on", "help cond" and "help clear"`},
+		{aliases: []string{"watch"}, group: breakCmds, cmdFn: watchpoint, helpMsg: `Set watchpoint.
+	
+	watch [-r|-w|-rw] <expr>
+	
+	-r	stops when the memory location is read
+	-w	stops when the memory location is written
+	-rw	stops when the memory location is read or written
+
+The memory location is specified with the same expression language used by 'print', for example:
+
+	watch v
+
+will watch the address of variable 'v'.
+
+See also: "help print".`},
 		{aliases: []string{"restart", "r"}, group: runCmds, cmdFn: restart, helpMsg: `Restart process.
 
 For recorded targets the command takes the following forms:
@@ -205,18 +220,62 @@ If called with the linespec argument it will delete all the breakpoints matching
 toggle <breakpoint name or id>`},
 		{aliases: []string{"goroutines", "grs"}, group: goroutineCmds, cmdFn: goroutines, helpMsg: `List program goroutines.
 
-	goroutines [-u (default: user location)|-r (runtime location)|-g (go statement location)|-s (start location)] [-t (stack trace)] [-l (labels)]
+	goroutines [-u|-r|-g|-s] [-t [depth]] [-l] [-with loc expr] [-without loc expr] [-group argument]
 
 Print out info for every goroutine. The flag controls what information is shown along with each goroutine:
 
-	-u	displays location of topmost stackframe in user code
+	-u	displays location of topmost stackframe in user code (default)
 	-r	displays location of topmost stackframe (including frames inside private runtime functions)
 	-g	displays location of go instruction that created the goroutine
 	-s	displays location of the start function
-	-t	displays goroutine's stacktrace
+	-t	displays goroutine's stacktrace (an optional depth value can be specified, default: 10)
 	-l	displays goroutine's labels
 
-If no flag is specified the default is -u.`},
+If no flag is specified the default is -u, i.e. the first frame within the first 30 frames that is not executing a runtime private function.
+
+FILTERING
+
+If -with or -without are specified only goroutines that match the given condition are returned.
+
+To only display goroutines where the specified location contains (or does not contain, for -without and -wo) expr as a substring, use:
+
+	goroutines -with (userloc|curloc|goloc|startloc) expr
+	goroutines -w (userloc|curloc|goloc|startloc) expr
+	goroutines -without (userloc|curloc|goloc|startloc) expr
+	goroutines -wo (userloc|curloc|goloc|startloc) expr
+	
+To only display goroutines that have (or do not have) the specified label key and value, use:
+	
+
+	goroutines -with label key=value
+	goroutines -without label key=value
+	
+To only display goroutines that have (or do not have) the specified label key, use:
+
+	goroutines -with label key
+	goroutines -without label key
+	
+To only display goroutines that are running (or are not running) on a OS thread, use:
+
+
+	goroutines -with running
+	goroutines -without running
+	
+To only display user (or runtime) goroutines, use:
+
+	goroutines -with user
+	goroutines -without user
+
+GROUPING
+
+	goroutines -group (userloc|curloc|goloc|startloc|running|user)
+
+Groups goroutines by the given location, running status or user classification, up to 5 goroutines per group will be displayed as well as the total number of goroutines in the group.
+
+	goroutines -group label key
+
+Groups goroutines by the value of the label with the specified key.
+`},
 		{aliases: []string{"goroutine", "gr"}, group: goroutineCmds, allowedPrefixes: onPrefix, cmdFn: c.goroutine, helpMsg: `Shows or changes current goroutine
 
 	goroutine
@@ -374,8 +433,21 @@ Supported commands: print, stack and goroutine)`},
 		{aliases: []string{"condition", "cond"}, group: breakCmds, cmdFn: conditionCmd, helpMsg: `Set breakpoint condition.
 
 	condition <breakpoint name or id> <boolean expression>.
+	condition -hitcount <breakpoint name or id> <operator> <argument>
 
-Specifies that the breakpoint or tracepoint should break only if the boolean expression is true.`},
+Specifies that the breakpoint, tracepoint or watchpoint should break only if the boolean expression is true.
+
+With the -hitcount option a condition on the breakpoint hit count can be set, the following operators are supported
+
+	condition -hitcount bp > n
+	condition -hitcount bp >= n
+	condition -hitcount bp < n
+	condition -hitcount bp <= n
+	condition -hitcount bp == n
+	condition -hitcount bp != n
+	condition -hitcount bp % n
+	
+The '% n' form means we should stop at the breakpoint when the hitcount is a multiple of n.`},
 		{aliases: []string{"config"}, cmdFn: configureCmd, helpMsg: `Changes configuration parameters.
 
 	config -list
@@ -691,67 +763,116 @@ const (
 	printGoroutinesLabels
 )
 
-func printGoroutines(t *Term, gs []*api.Goroutine, fgl formatGoroutineLoc, flags printGoroutinesFlags, state *api.DebuggerState) error {
+func printGoroutines(t *Term, indent string, gs []*api.Goroutine, fgl formatGoroutineLoc, flags printGoroutinesFlags, depth int, state *api.DebuggerState) error {
 	for _, g := range gs {
-		prefix := "  "
+		prefix := indent + "  "
 		if state.SelectedGoroutine != nil && g.ID == state.SelectedGoroutine.ID {
-			prefix = "* "
+			prefix = indent + "* "
 		}
 		fmt.Printf("%sGoroutine %s\n", prefix, t.formatGoroutine(g, fgl))
 		if flags&printGoroutinesLabels != 0 {
-			writeGoroutineLabels(os.Stdout, g, "\t")
+			writeGoroutineLabels(os.Stdout, g, indent+"\t")
 		}
 		if flags&printGoroutinesStack != 0 {
-			stack, err := t.client.Stacktrace(g.ID, 10, 0, nil)
+			stack, err := t.client.Stacktrace(g.ID, depth, 0, nil)
 			if err != nil {
 				return err
 			}
-			printStack(t, os.Stdout, stack, "\t", false)
+			printStack(t, os.Stdout, stack, indent+"\t", false)
 		}
 	}
 	return nil
 }
 
+const (
+	maxGroupMembers    = 5
+	maxGoroutineGroups = 50
+)
+
 func goroutines(t *Term, ctx callContext, argstr string) error {
 	args := strings.Split(argstr, " ")
+	var filters []api.ListGoroutinesFilter
+	var group api.GoroutineGroupingOptions
 	var fgl = fglUserCurrent
 	var flags printGoroutinesFlags
+	var depth = 10
+	var batchSize = goroutineBatchSize
 
-	switch len(args) {
-	case 0:
-		// nothing to do
-	case 1, 2:
-		for _, arg := range args {
-			switch arg {
-			case "-u":
-				fgl = fglUserCurrent
-			case "-r":
-				fgl = fglRuntimeCurrent
-			case "-g":
-				fgl = fglGo
-			case "-s":
-				fgl = fglStart
-			case "-t":
-				flags |= printGoroutinesStack
-			case "-l":
-				flags |= printGoroutinesLabels
-			case "":
-				// nothing to do
-			default:
-				return fmt.Errorf("wrong argument: '%s'", arg)
+	group.MaxGroupMembers = maxGroupMembers
+	group.MaxGroups = maxGoroutineGroups
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "-u":
+			fgl = fglUserCurrent
+		case "-r":
+			fgl = fglRuntimeCurrent
+		case "-g":
+			fgl = fglGo
+		case "-s":
+			fgl = fglStart
+		case "-l":
+			flags |= printGoroutinesLabels
+		case "-t":
+			flags |= printGoroutinesStack
+			// optional depth argument
+			if i+1 < len(args) && len(args[i+1]) > 0 {
+				n, err := strconv.Atoi(args[i+1])
+				if err == nil {
+					depth = n
+					i++
+				}
 			}
+
+		case "-w", "-with":
+			filter, err := readGoroutinesFilter(args, &i)
+			if err != nil {
+				return err
+			}
+			filters = append(filters, *filter)
+
+		case "-wo", "-without":
+			filter, err := readGoroutinesFilter(args, &i)
+			if err != nil {
+				return err
+			}
+			filter.Negated = true
+			filters = append(filters, *filter)
+
+		case "-group":
+			var err error
+			group.GroupBy, err = readGoroutinesFilterKind(args, i+1)
+			if err != nil {
+				return err
+			}
+			i++
+			if group.GroupBy == api.GoroutineLabel {
+				if i+1 >= len(args) {
+					return errors.New("-group label must be followed by an argument")
+				}
+				group.GroupByKey = args[i+1]
+				i++
+			}
+			batchSize = 0 // grouping only works well if run on all goroutines
+
+		case "":
+			// nothing to do
+		default:
+			return fmt.Errorf("wrong argument: '%s'", arg)
 		}
-	default:
-		return fmt.Errorf("too many arguments")
 	}
+
 	state, err := t.client.GetState()
 	if err != nil {
 		return err
 	}
 	var (
-		start = 0
-		gslen = 0
-		gs    []*api.Goroutine
+		start         = 0
+		gslen         = 0
+		gs            []*api.Goroutine
+		groups        []api.GoroutineGroup
+		tooManyGroups bool
 	)
 	t.longCommandStart()
 	for start >= 0 {
@@ -759,19 +880,84 @@ func goroutines(t *Term, ctx callContext, argstr string) error {
 			fmt.Printf("interrupted\n")
 			return nil
 		}
-		gs, start, err = t.client.ListGoroutines(start, goroutineBatchSize)
+		gs, groups, start, tooManyGroups, err = t.client.ListGoroutinesWithFilter(start, batchSize, filters, &group)
 		if err != nil {
 			return err
 		}
-		sort.Sort(byGoroutineID(gs))
-		err = printGoroutines(t, gs, fgl, flags, state)
-		if err != nil {
-			return err
+		if len(groups) > 0 {
+			for i := range groups {
+				fmt.Printf("%s\n", groups[i].Name)
+				err = printGoroutines(t, "\t", gs[groups[i].Offset:][:groups[i].Count], fgl, flags, depth, state)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("\tTotal: %d\n", groups[i].Total)
+				if i != len(groups)-1 {
+					fmt.Printf("\n")
+				}
+			}
+			if tooManyGroups {
+				fmt.Printf("Too many groups\n")
+			}
+		} else {
+			sort.Sort(byGoroutineID(gs))
+			err = printGoroutines(t, "", gs, fgl, flags, depth, state)
+			if err != nil {
+				return err
+			}
+			gslen += len(gs)
 		}
-		gslen += len(gs)
 	}
-	fmt.Printf("[%d goroutines]\n", gslen)
+	if gslen > 0 {
+		fmt.Printf("[%d goroutines]\n", gslen)
+	}
 	return nil
+}
+
+func readGoroutinesFilterKind(args []string, i int) (api.GoroutineField, error) {
+	if i >= len(args) {
+		return api.GoroutineFieldNone, fmt.Errorf("%s must be followed by an argument", args[i-1])
+	}
+
+	switch args[i] {
+	case "curloc":
+		return api.GoroutineCurrentLoc, nil
+	case "userloc":
+		return api.GoroutineUserLoc, nil
+	case "goloc":
+		return api.GoroutineGoLoc, nil
+	case "startloc":
+		return api.GoroutineStartLoc, nil
+	case "label":
+		return api.GoroutineLabel, nil
+	case "running":
+		return api.GoroutineRunning, nil
+	case "user":
+		return api.GoroutineUser, nil
+	default:
+		return api.GoroutineFieldNone, fmt.Errorf("unrecognized argument to %s %s", args[i-1], args[i])
+	}
+}
+
+func readGoroutinesFilter(args []string, pi *int) (*api.ListGoroutinesFilter, error) {
+	r := new(api.ListGoroutinesFilter)
+	var err error
+	r.Kind, err = readGoroutinesFilterKind(args, *pi+1)
+	if err != nil {
+		return nil, err
+	}
+	*pi++
+	switch r.Kind {
+	case api.GoroutineRunning, api.GoroutineUser:
+		return r, nil
+	}
+	if *pi+1 >= len(args) {
+		return nil, fmt.Errorf("%s %s needs to be followed by an expression", args[*pi-1], args[*pi])
+	}
+	r.Arg = args[*pi+1]
+	*pi++
+
+	return r, nil
 }
 
 func selectedGID(state *api.DebuggerState) int {
@@ -1282,7 +1468,7 @@ func scopePrefixSwitch(t *Term, ctx callContext) error {
 
 func exitedToError(state *api.DebuggerState, err error) (*api.DebuggerState, error) {
 	if err == nil && state.Exited {
-		return nil, fmt.Errorf("Process has exited with status %d", state.ExitStatus)
+		return nil, fmt.Errorf("Process %d has exited with status %d", state.Pid, state.ExitStatus)
 	}
 	return state, err
 }
@@ -1520,6 +1706,9 @@ func breakpoints(t *Term, ctx callContext, args string) error {
 		if bp.Cond != "" {
 			attrs = append(attrs, fmt.Sprintf("\tcond %s", bp.Cond))
 		}
+		if bp.HitCond != "" {
+			attrs = append(attrs, fmt.Sprintf("\tcond -hitcount %s", bp.HitCond))
+		}
 		if bp.Stacktrace > 0 {
 			attrs = append(attrs, fmt.Sprintf("\tstack %d", bp.Stacktrace))
 		}
@@ -1664,6 +1853,30 @@ func edit(t *Term, ctx callContext, args string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func watchpoint(t *Term, ctx callContext, args string) error {
+	v := strings.SplitN(args, " ", 2)
+	if len(v) != 2 {
+		return errors.New("wrong number of arguments: watch [-r|-w|-rw] <expr>")
+	}
+	var wtype api.WatchType
+	switch v[0] {
+	case "-r":
+		wtype = api.WatchRead
+	case "-w":
+		wtype = api.WatchWrite
+	case "-rw":
+		wtype = api.WatchRead | api.WatchWrite
+	default:
+		return fmt.Errorf("wrong argument %q to watch", v[0])
+	}
+	bp, err := t.client.CreateWatchpoint(ctx.Scope, v[1], wtype)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s set at %s\n", formatBreakpointName(bp, true), t.formatBreakpointLocation(bp))
+	return nil
 }
 
 func examineMemoryCmd(t *Term, ctx callContext, argstr string) error {
@@ -2289,64 +2502,8 @@ func digits(n int) int {
 	return int(math.Floor(math.Log10(float64(n)))) + 1
 }
 
-const stacktraceTruncatedMessage = "(truncated)"
-
 func printStack(t *Term, out io.Writer, stack []api.Stackframe, ind string, offsets bool) {
-	if len(stack) == 0 {
-		return
-	}
-
-	extranl := offsets
-	for i := range stack {
-		if extranl {
-			break
-		}
-		extranl = extranl || (len(stack[i].Defers) > 0) || (len(stack[i].Arguments) > 0) || (len(stack[i].Locals) > 0)
-	}
-
-	d := digits(len(stack) - 1)
-	fmtstr := "%s%" + strconv.Itoa(d) + "d  0x%016x in %s\n"
-	s := ind + strings.Repeat(" ", d+2+len(ind))
-
-	for i := range stack {
-		if stack[i].Err != "" {
-			fmt.Fprintf(out, "%serror: %s\n", s, stack[i].Err)
-			continue
-		}
-		fmt.Fprintf(out, fmtstr, ind, i, stack[i].PC, stack[i].Function.Name())
-		fmt.Fprintf(out, "%sat %s:%d\n", s, t.formatPath(stack[i].File), stack[i].Line)
-
-		if offsets {
-			fmt.Fprintf(out, "%sframe: %+#x frame pointer %+#x\n", s, stack[i].FrameOffset, stack[i].FramePointerOffset)
-		}
-
-		for j, d := range stack[i].Defers {
-			deferHeader := fmt.Sprintf("%s    defer %d: ", s, j+1)
-			s2 := strings.Repeat(" ", len(deferHeader))
-			if d.Unreadable != "" {
-				fmt.Fprintf(out, "%s(unreadable defer: %s)\n", deferHeader, d.Unreadable)
-				continue
-			}
-			fmt.Fprintf(out, "%s%#016x in %s\n", deferHeader, d.DeferredLoc.PC, d.DeferredLoc.Function.Name())
-			fmt.Fprintf(out, "%sat %s:%d\n", s2, t.formatPath(d.DeferredLoc.File), d.DeferredLoc.Line)
-			fmt.Fprintf(out, "%sdeferred by %s at %s:%d\n", s2, d.DeferLoc.Function.Name(), t.formatPath(d.DeferLoc.File), d.DeferLoc.Line)
-		}
-
-		for j := range stack[i].Arguments {
-			fmt.Fprintf(out, "%s    %s = %s\n", s, stack[i].Arguments[j].Name, stack[i].Arguments[j].SinglelineString())
-		}
-		for j := range stack[i].Locals {
-			fmt.Fprintf(out, "%s    %s = %s\n", s, stack[i].Locals[j].Name, stack[i].Locals[j].SinglelineString())
-		}
-
-		if extranl {
-			fmt.Fprintln(out)
-		}
-	}
-
-	if len(stack) > 0 && !stack[len(stack)-1].Bottom {
-		fmt.Fprintf(out, "%s"+stacktraceTruncatedMessage+"\n", ind)
-	}
+	api.PrintStack(t.formatPath, out, stack, ind, offsets, func(api.Stackframe) bool { return true })
 }
 
 func printcontext(t *Term, state *api.DebuggerState) {
@@ -2441,7 +2598,9 @@ func printcontextThread(t *Term, th *api.Thread) {
 	}
 
 	bpname := ""
-	if th.Breakpoint.Name != "" {
+	if th.Breakpoint.WatchExpr != "" {
+		bpname = fmt.Sprintf("watchpoint on [%s] ", th.Breakpoint.WatchExpr)
+	} else if th.Breakpoint.Name != "" {
 		bpname = fmt.Sprintf("[%s] ", th.Breakpoint.Name)
 	}
 
@@ -2634,6 +2793,22 @@ func conditionCmd(t *Term, ctx callContext, argstr string) error {
 		return fmt.Errorf("not enough arguments")
 	}
 
+	if args[0] == "-hitcount" {
+		// hitcount breakpoint
+		args = split2PartsBySpace(args[1])
+		if len(args) < 2 {
+			return fmt.Errorf("not enough arguments")
+		}
+		bp, err := getBreakpointByIDOrName(t, args[0])
+		if err != nil {
+			return err
+		}
+
+		bp.HitCond = args[1]
+
+		return t.client.AmendBreakpoint(bp)
+	}
+
 	bp, err := getBreakpointByIDOrName(t, args[0])
 	if err != nil {
 		return err
@@ -2803,12 +2978,18 @@ func formatBreakpointName(bp *api.Breakpoint, upcase bool) string {
 	if bp.Tracepoint {
 		thing = "tracepoint"
 	}
+	if bp.WatchExpr != "" {
+		thing = "watchpoint"
+	}
 	if upcase {
 		thing = strings.Title(thing)
 	}
 	id := bp.Name
 	if id == "" {
 		id = strconv.Itoa(bp.ID)
+	}
+	if bp.WatchExpr != "" && bp.WatchExpr != bp.Name {
+		return fmt.Sprintf("%s %s on [%s]", thing, id, bp.WatchExpr)
 	}
 	state := "(enabled)"
 	if bp.Disabled {
@@ -2831,11 +3012,13 @@ func (t *Term) formatBreakpointLocation(bp *api.Breakpoint) string {
 		// In case we are connecting to an older version of delve that does not return the Addrs field.
 		fmt.Fprintf(&out, "%#x", bp.Addr)
 	}
-	fmt.Fprintf(&out, " for ")
-	p := t.formatPath(bp.File)
-	if bp.FunctionName != "" {
-		fmt.Fprintf(&out, "%s() ", bp.FunctionName)
+	if bp.WatchExpr == "" {
+		fmt.Fprintf(&out, " for ")
+		p := t.formatPath(bp.File)
+		if bp.FunctionName != "" {
+			fmt.Fprintf(&out, "%s() ", bp.FunctionName)
+		}
+		fmt.Fprintf(&out, "%s:%d", p, bp.Line)
 	}
-	fmt.Fprintf(&out, "%s:%d", p, bp.Line)
 	return out.String()
 }

@@ -3,7 +3,6 @@ package proc
 import (
 	"bytes"
 	"debug/dwarf"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -34,6 +33,7 @@ type EvalScope struct {
 	Mem     MemoryReadWriter // Target's memory
 	g       *G
 	BinInfo *BinaryInfo
+	target  *Target
 
 	frameOffset int64
 
@@ -69,16 +69,18 @@ func ConvertEvalScope(dbp *Target, gid, frame, deferCall int) (*EvalScope, error
 	if err != nil {
 		return nil, err
 	}
-	if g == nil {
-		return ThreadScope(ct)
-	}
 
 	var opts StacktraceOptions
 	if deferCall > 0 {
 		opts = StacktraceReadDefers
 	}
 
-	locs, err := g.Stacktrace(frame+1, opts)
+	var locs []Stackframe
+	if g != nil {
+		locs, err = g.Stacktrace(frame+1, opts)
+	} else {
+		locs, err = ThreadStacktrace(ct, frame+1)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -97,10 +99,10 @@ func ConvertEvalScope(dbp *Target, gid, frame, deferCall int) (*EvalScope, error
 			return nil, d.Unreadable
 		}
 
-		return d.EvalScope(ct)
+		return d.EvalScope(dbp, ct)
 	}
 
-	return FrameToScope(dbp.BinInfo(), dbp.Memory(), g, locs[frame:]...), nil
+	return FrameToScope(dbp, dbp.BinInfo(), dbp.Memory(), g, locs[frame:]...), nil
 }
 
 // FrameToScope returns a new EvalScope for frames[0].
@@ -108,7 +110,7 @@ func ConvertEvalScope(dbp *Target, gid, frame, deferCall int) (*EvalScope, error
 // frames[0].Regs.SP() and frames[1].Regs.CFA will be cached.
 // Otherwise all memory between frames[0].Regs.SP() and frames[0].Regs.CFA
 // will be cached.
-func FrameToScope(bi *BinaryInfo, thread MemoryReadWriter, g *G, frames ...Stackframe) *EvalScope {
+func FrameToScope(t *Target, bi *BinaryInfo, thread MemoryReadWriter, g *G, frames ...Stackframe) *EvalScope {
 	// Creates a cacheMem that will preload the entire stack frame the first
 	// time any local variable is read.
 	// Remember that the stack grows downward in memory.
@@ -123,13 +125,13 @@ func FrameToScope(bi *BinaryInfo, thread MemoryReadWriter, g *G, frames ...Stack
 		thread = cacheMemory(thread, minaddr, int(maxaddr-minaddr))
 	}
 
-	s := &EvalScope{Location: frames[0].Call, Regs: frames[0].Regs, Mem: thread, g: g, BinInfo: bi, frameOffset: frames[0].FrameOffset()}
+	s := &EvalScope{Location: frames[0].Call, Regs: frames[0].Regs, Mem: thread, g: g, BinInfo: bi, target: t, frameOffset: frames[0].FrameOffset()}
 	s.PC = frames[0].lastpc
 	return s
 }
 
 // ThreadScope returns an EvalScope for the given thread.
-func ThreadScope(thread Thread) (*EvalScope, error) {
+func ThreadScope(t *Target, thread Thread) (*EvalScope, error) {
 	locations, err := ThreadStacktrace(thread, 1)
 	if err != nil {
 		return nil, err
@@ -137,11 +139,11 @@ func ThreadScope(thread Thread) (*EvalScope, error) {
 	if len(locations) < 1 {
 		return nil, errors.New("could not decode first frame")
 	}
-	return FrameToScope(thread.BinInfo(), thread.ProcessMemory(), nil, locations...), nil
+	return FrameToScope(t, thread.BinInfo(), thread.ProcessMemory(), nil, locations...), nil
 }
 
 // GoroutineScope returns an EvalScope for the goroutine running on the given thread.
-func GoroutineScope(thread Thread) (*EvalScope, error) {
+func GoroutineScope(t *Target, thread Thread) (*EvalScope, error) {
 	locations, err := ThreadStacktrace(thread, 1)
 	if err != nil {
 		return nil, err
@@ -153,7 +155,7 @@ func GoroutineScope(thread Thread) (*EvalScope, error) {
 	if err != nil {
 		return nil, err
 	}
-	return FrameToScope(thread.BinInfo(), thread.ProcessMemory(), g, locations...), nil
+	return FrameToScope(t, thread.BinInfo(), thread.ProcessMemory(), g, locations...), nil
 }
 
 // EvalExpression returns the value of the given expression.
@@ -221,7 +223,7 @@ func (scope *EvalScope) Locals() ([]*Variable, error) {
 	vars := make([]*Variable, 0, len(varEntries))
 	depths := make([]int, 0, len(varEntries))
 	for _, entry := range varEntries {
-		val, err := extractVarInfoFromEntry(scope.BinInfo, scope.image(), scope.Regs, scope.Mem, entry.Tree)
+		val, err := extractVarInfoFromEntry(scope.target, scope.BinInfo, scope.image(), scope.Regs, scope.Mem, entry.Tree)
 		if err != nil {
 			// skip variables that we can't parse yet
 			continue
@@ -624,7 +626,7 @@ func (scope *EvalScope) PackageVariables(cfg LoadConfig) ([]*Variable, error) {
 		}
 
 		// Ignore errors trying to extract values
-		val, err := extractVarInfoFromEntry(scope.BinInfo, pkgvar.cu.image, regsReplaceStaticBase(scope.Regs, pkgvar.cu.image), scope.Mem, godwarf.EntryToTree(entry))
+		val, err := extractVarInfoFromEntry(scope.target, scope.BinInfo, pkgvar.cu.image, regsReplaceStaticBase(scope.Regs, pkgvar.cu.image), scope.Mem, godwarf.EntryToTree(entry))
 		if val != nil && val.Kind == reflect.Invalid {
 			continue
 		}
@@ -661,7 +663,7 @@ func (scope *EvalScope) findGlobalInternal(name string) (*Variable, error) {
 			if err != nil {
 				return nil, err
 			}
-			return extractVarInfoFromEntry(scope.BinInfo, pkgvar.cu.image, regsReplaceStaticBase(scope.Regs, pkgvar.cu.image), scope.Mem, godwarf.EntryToTree(entry))
+			return extractVarInfoFromEntry(scope.target, scope.BinInfo, pkgvar.cu.image, regsReplaceStaticBase(scope.Regs, pkgvar.cu.image), scope.Mem, godwarf.EntryToTree(entry))
 		}
 	}
 	for _, fn := range scope.BinInfo.Functions {
@@ -872,7 +874,7 @@ func (scope *EvalScope) evalAST(t ast.Expr) (*Variable, error) {
 					if err != nil {
 						return nil, fmt.Errorf("blah: %v", err)
 					}
-					gvar := newVariable("curg", fakeAddress, typ, scope.BinInfo, scope.Mem)
+					gvar := newVariable("curg", fakeAddressUnresolv, typ, scope.BinInfo, scope.Mem)
 					gvar.loaded = true
 					gvar.Flags = VariableFakeAddress
 					gvar.Children = append(gvar.Children, *newConstant(constant.MakeInt64(0), scope.Mem))
@@ -993,7 +995,14 @@ func (scope *EvalScope) evalTypeCast(node *ast.CallExpr) (*Variable, error) {
 
 		n, _ := constant.Int64Val(argv.Value)
 
-		v.Children = []Variable{*(newVariable("", uint64(n), ttyp.Type, scope.BinInfo, scope.Mem))}
+		mem := scope.Mem
+		if scope.target != nil {
+			if mem2 := scope.target.findFakeMemory(uint64(n)); mem2 != nil {
+				mem = mem2
+			}
+		}
+
+		v.Children = []Variable{*(newVariable("", uint64(n), ttyp.Type, scope.BinInfo, mem))}
 		v.Children[0].OnlyAddr = true
 		return v, nil
 
@@ -1056,17 +1065,14 @@ func (scope *EvalScope) evalTypeCast(node *ast.CallExpr) (*Variable, error) {
 }
 
 func convertInt(n uint64, signed bool, size int64) uint64 {
-	buf := make([]byte, 64/8)
-	binary.BigEndian.PutUint64(buf, n)
-	m := 64/8 - int(size)
-	s := byte(0)
-	if signed && (buf[m]&0x80 > 0) {
-		s = 0xff
+	bits := uint64(size) * 8
+	mask := uint64((1 << bits) - 1)
+	r := n & mask
+	if signed && (r>>(bits-1)) != 0 {
+		// sign extension
+		r |= ^uint64(0) &^ mask
 	}
-	for i := 0; i < m; i++ {
-		buf[i] = s
-	}
-	return uint64(binary.BigEndian.Uint64(buf))
+	return r
 }
 
 func (scope *EvalScope) evalBuiltinCall(node *ast.CallExpr) (*Variable, error) {
@@ -1313,9 +1319,9 @@ func (scope *EvalScope) evalIdent(node *ast.Ident) (*Variable, error) {
 				v := newVariable(node.Name, 0, typ, scope.BinInfo, scope.Mem)
 				if v.Kind == reflect.String {
 					v.Len = int64(len(reg.Bytes) * 2)
-					v.Base = fakeAddress
+					v.Base = fakeAddressUnresolv
 				}
-				v.Addr = fakeAddress
+				v.Addr = fakeAddressUnresolv
 				v.Flags = VariableCPURegister
 				v.reg = reg
 				return v, nil
@@ -1787,8 +1793,15 @@ func (scope *EvalScope) evalBinary(node *ast.BinaryExpr) (*Variable, error) {
 
 		r := xv.newVariable("", 0, typ, scope.Mem)
 		r.Value = rc
-		if r.Kind == reflect.String {
+		switch r.Kind {
+		case reflect.String:
 			r.Len = xv.Len + yv.Len
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			n, _ := constant.Int64Val(r.Value)
+			r.Value = constant.MakeInt64(int64(convertInt(uint64(n), true, typ.Size())))
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			n, _ := constant.Uint64Val(r.Value)
+			r.Value = constant.MakeUint64(convertInt(n, false, typ.Size()))
 		}
 		return r, nil
 	}
@@ -2096,6 +2109,31 @@ func (v *Variable) mapAccess(idx *Variable) (*Variable, error) {
 	}
 	// go would return zero for the map value type here, we do not have the ability to create zeroes
 	return nil, fmt.Errorf("key not found")
+}
+
+// LoadResliced returns a new array, slice or map that starts at index start and contains
+// up to cfg.MaxArrayValues children.
+func (v *Variable) LoadResliced(start int, cfg LoadConfig) (newV *Variable, err error) {
+	switch v.Kind {
+	case reflect.Array, reflect.Slice:
+		low, high := int64(start), int64(start+cfg.MaxArrayValues)
+		if high > v.Len {
+			high = v.Len
+		}
+		newV, err = v.reslice(low, high)
+		if err != nil {
+			return nil, err
+		}
+	case reflect.Map:
+		newV = v.clone()
+		newV.Children = nil
+		newV.loaded = false
+		newV.mapSkip = start
+	default:
+		return nil, fmt.Errorf("variable to reslice is not an array, slice, or map")
+	}
+	newV.loadValue(cfg)
+	return newV, nil
 }
 
 func (v *Variable) reslice(low int64, high int64) (*Variable, error) {
