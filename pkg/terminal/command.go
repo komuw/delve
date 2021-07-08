@@ -297,7 +297,7 @@ The optional format argument is a format specifier, like the ones used by the fm
 
 	whatis [-v] <expression>
 
-If -v is specified more information about each expression will be shown.`},
+If -v is specified more information about the expression will be shown.`},
 		{aliases: []string{"set"}, group: dataCmds, cmdFn: setVar, helpMsg: `Changes the value of a variable.
 
 	[goroutine <n>] [frame <m>] set <variable> = <value>
