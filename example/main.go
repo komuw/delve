@@ -61,6 +61,8 @@ func (f fn) MethodOnFunc() int64 {
 }
 
 /*
+// Note: There's a proposal by rsc to remove  -buildmode=shared https://github.com/golang/go/issues/47788
+
 go mod tidy
 make install
 go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go
