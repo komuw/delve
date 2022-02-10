@@ -198,6 +198,14 @@ func (scope *EvalScope) EvalExpression(expr string, cfg LoadConfig) (*Variable, 
 		scope.callCtx.doReturn(nil, err)
 		return nil, err
 	}
+
+	////////////////////////////////////
+	// TODO: this gets called for both `whatis` command and `print` command.
+	// It should only be called when `whatis -v <expression>` is used.
+	methods, fields := GetPubApi(ev)
+	printPubApi(ev, methods, fields)
+	///////////////////////////////////
+
 	ev.loadValue(cfg)
 	if ev.Name == "" {
 		ev.Name = expr
@@ -212,6 +220,150 @@ func isAssignment(err error) (int, bool) {
 		return el[0].Pos.Offset, true
 	}
 	return 0, false
+}
+
+// GetPubApi returns the public API of the given variable
+//
+// For this method to work, the binary should be compile with -ldflags='all=-linkshared'
+// Note: There's a proposal by rsc to remove  -buildmode=shared https://github.com/golang/go/issues/47788
+// so as to disable dead code elimination
+func GetPubApi(v *Variable) (methods []string, fields []string) {
+
+	// isPublic determines if a methodName or fieldName are part of public API
+	isPublic := func(mname string) bool {
+		return unicode.IsUpper(rune(mname[0]))
+	}
+
+	// contains tells whether a contains x.
+	contains := func(a []string, x string) bool {
+		for _, n := range a {
+			if x == n {
+				return true
+			}
+		}
+		return false
+	}
+
+	getMethods := func(v *Variable) (methods []string) {
+		if v == nil {
+			return
+		}
+
+		typ := v.DwarfType
+		ptyp, isptr := typ.(*godwarf.PtrType)
+		if isptr {
+			typ = ptyp.Type
+		}
+		typePath := typ.Common().Name
+		dot := strings.LastIndex(typePath, ".")
+		if dot < 0 {
+			// probably just a C type
+			return
+		}
+		pkg := typePath[:dot]
+		receiver := typePath[dot+1:]
+		valSearch := fmt.Sprintf("%s.%s.", pkg, receiver)
+		ptrSearch := fmt.Sprintf("%s.(*%s).", pkg, receiver)
+
+		for k, _ := range v.bi.LookupFunc {
+			if strings.HasPrefix(k, valSearch) || strings.HasPrefix(k, ptrSearch) {
+				tmp := strings.Split(k, ".")
+				mname := tmp[len(tmp)-1]
+				if isPublic(mname) {
+					rv, err := v.findMethod(mname)
+					if err != nil {
+						fmt.Println("findMethod error: ", err)
+					}
+					signature := fmt.Sprintf("%s %s", mname, rv.DwarfType.Common().Name)
+					if !contains(methods, signature) {
+						methods = append(methods, signature)
+					}
+				}
+			}
+		}
+		return methods
+	}
+
+	getFields := func(v *Variable) (fields []string) {
+		if v == nil {
+			return
+		}
+
+		switch v.Kind {
+		case reflect.Struct:
+			// ie, v := T
+			t := v.RealType.(*godwarf.StructType)
+			for _, field := range t.Field {
+				if isPublic(field.Name) {
+					fields = append(fields,
+						fmt.Sprintf("%s %s", field.Name, field.Type.Common().Name),
+					)
+				}
+			}
+		case reflect.Ptr:
+			// ie, v := &T
+			arg := v.maybeDereference()
+			t, ok := arg.RealType.(*godwarf.StructType)
+			if ok {
+				for _, field := range t.Field {
+					if isPublic(field.Name) {
+						fields = append(fields,
+							fmt.Sprintf("%s %s", field.Name, field.Type.Common().Name),
+						)
+					}
+				}
+			}
+		}
+		return fields
+	}
+
+	return getMethods(v), getFields(v)
+}
+
+func printPubApi(val *Variable, methods []string, fields []string) {
+	if val == nil {
+		return
+	}
+
+	typ := val.RealType.String()
+	switch val.Kind {
+	case reflect.Interface:
+		if len(val.Children) > 0 {
+			s := val.Children[0].RealType.String()
+			if s == "void" {
+				s = val.RealType.String()
+			}
+			typ = fmt.Sprintf("%s %s", val.Kind, s)
+		}
+	case reflect.Ptr:
+		arg := val.maybeDereference()
+		t, ok := arg.RealType.(*godwarf.StructType)
+		if ok {
+			typ = fmt.Sprintf("%s *%s", t.Kind, t.StructName)
+		}
+	}
+
+	pretty := fmt.Sprintf("%s {", typ)
+
+	if fields != nil {
+		pretty = pretty + "\n  fields:"
+		for _, f := range fields {
+			pretty = pretty + "\n    " + f
+		}
+	}
+
+	if methods != nil {
+		pretty = pretty + "\n  methods:"
+		for _, m := range methods {
+			pretty = pretty + "\n    " + m
+
+		}
+	}
+	pretty = pretty + "\n}"
+
+	fmt.Println("\t ===printVar:===")
+	fmt.Println(pretty)
+	fmt.Println("\t ===printVar:===")
 }
 
 // Locals returns all variables in 'scope'.
@@ -422,162 +574,6 @@ func (scope *EvalScope) setValue(dstv, srcv *Variable, srcExpr string) error {
 	}
 
 	return fmt.Errorf("can not set variables of type %s (not implemented)", dstv.Kind.String())
-}
-
-// GetPubApi returns the public API of the given variable
-//
-// For this method to work, the binary should be compile with -ldflags='all=-linkshared'
-// Note: There's a proposal by rsc to remove  -buildmode=shared https://github.com/golang/go/issues/47788
-// so as to disable dead code elimination
-func GetPubApi(v *Variable) (methods []string, fields []string) {
-
-	// isPublic determines if a methodName or fieldName are part of public API
-	isPublic := func(mname string) bool {
-		return unicode.IsUpper(rune(mname[0]))
-	}
-
-	// contains tells whether a contains x.
-	contains := func(a []string, x string) bool {
-		for _, n := range a {
-			if x == n {
-				return true
-			}
-		}
-		return false
-	}
-
-	getMethods := func(v *Variable) (methods []string) {
-		if v == nil {
-			return
-		}
-
-		typ := v.DwarfType
-		ptyp, isptr := typ.(*godwarf.PtrType)
-		if isptr {
-			typ = ptyp.Type
-		}
-		typePath := typ.Common().Name
-		dot := strings.LastIndex(typePath, ".")
-		if dot < 0 {
-			// probably just a C type
-			return
-		}
-		pkg := typePath[:dot]
-		receiver := typePath[dot+1:]
-		valSearch := fmt.Sprintf("%s.%s.", pkg, receiver)
-		ptrSearch := fmt.Sprintf("%s.(*%s).", pkg, receiver)
-
-		for k, _ := range v.bi.LookupFunc {
-			if strings.HasPrefix(k, valSearch) || strings.HasPrefix(k, ptrSearch) {
-				tmp := strings.Split(k, ".")
-				mname := tmp[len(tmp)-1]
-				if isPublic(mname) {
-					rv, err := v.findMethod(mname)
-					if err != nil {
-						fmt.Println("findMethod error: ", err)
-					}
-					signature := fmt.Sprintf("%s %s", mname, rv.DwarfType.Common().Name)
-					if !contains(methods, signature) {
-						methods = append(methods, signature)
-					}
-				}
-			}
-		}
-		return methods
-	}
-
-	getFields := func(v *Variable) (fields []string) {
-		if v == nil {
-			return
-		}
-
-		switch v.Kind {
-		case reflect.Struct:
-			// ie, v := T
-			t := v.RealType.(*godwarf.StructType)
-			for _, field := range t.Field {
-				if isPublic(field.Name) {
-					fields = append(fields,
-						fmt.Sprintf("%s %s", field.Name, field.Type.Common().Name),
-					)
-				}
-			}
-		case reflect.Ptr:
-			// ie, v := &T
-			arg := v.maybeDereference()
-			t, ok := arg.RealType.(*godwarf.StructType)
-			if ok {
-				for _, field := range t.Field {
-					if isPublic(field.Name) {
-						fields = append(fields,
-							fmt.Sprintf("%s %s", field.Name, field.Type.Common().Name),
-						)
-					}
-				}
-			}
-		}
-		return fields
-	}
-
-	return getMethods(v), getFields(v)
-}
-
-func printPubApi(val *Variable, methods []string, fields []string) {
-	if val == nil {
-		return
-	}
-
-	typ := val.RealType.String()
-	switch val.Kind {
-	case reflect.Interface:
-		if len(val.Children) > 0 {
-			s := val.Children[0].RealType.String()
-			if s == "void" {
-				s = val.RealType.String()
-			}
-			typ = fmt.Sprintf("%s %s", val.Kind, s)
-		}
-	case reflect.Ptr:
-		arg := val.maybeDereference()
-		t, ok := arg.RealType.(*godwarf.StructType)
-		if ok {
-			typ = fmt.Sprintf("%s *%s", t.Kind, t.StructName)
-		}
-	}
-
-	pretty := fmt.Sprintf("%s {", typ)
-
-	if fields != nil {
-		pretty = pretty + "\n  fields:"
-		for _, f := range fields {
-			pretty = pretty + "\n    " + f
-		}
-	}
-
-	if methods != nil {
-		pretty = pretty + "\n  methods:"
-		for _, m := range methods {
-			pretty = pretty + "\n    " + m
-
-		}
-	}
-	pretty = pretty + "\n}"
-
-	fmt.Println("\t ===printVar:===")
-	fmt.Println(pretty)
-	fmt.Println("\t ===printVar:===")
-}
-
-// EvalVariable returns the value of the given expression (backwards compatibility).
-func (scope *EvalScope) EvalVariable(name string, cfg LoadConfig) (*Variable, error) {
-	val, err := scope.EvalExpression(name, cfg)
-
-	// TODO: this gets called for both `whatis` command and `print` command.
-	// It should only be called when `whatis -v <expression>` is used.
-	methods, fields := GetPubApi(val)
-	printPubApi(val, methods, fields)
-
-	return val, err
 }
 
 // SetVariable sets the value of the named variable

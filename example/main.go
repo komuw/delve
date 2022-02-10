@@ -8,77 +8,31 @@ import (
 	"time"
 )
 
-// Distance is length in meters
-type Distance float64
+/* How to run this demo:
+A. Get the code and drop inside a docker container.
+git clone git@github.com:go-delve/delve.git
+cd delve
+git checkout issues/2249-A
+docker-compose run app
 
-func (d Distance) ToCm() float64 {
-	return float64(d) * 100
-}
-func (d *Distance) ToFeet() float64 {
-	return float64(*d) * 3.28084
-}
-
-type Health struct {
-	ID   uint64
-	Date time.Time
-}
-
-type Cooler struct{}
-
-func (d Cooler) Ala() float64 {
-	return 3.28084
-}
-
-type Fire struct {
-	HH        Health
-	Age       int64
-	Name      string
-	Dist      Distance
-	Day       time.Time
-	privField int64
-}
-
-func (f Fire) Hello(i int) string {
-	return strconv.Itoa(i)
-}
-
-func (f *Fire) MethodTwo() int64 {
-	return 78
-}
-
-func (f Fire) privMethod() string {
-	return "A private Method"
-}
-
-type MyInter interface {
-	Read(p []byte) (n int, err error)
-}
-
-type fn func(x int, y string) uint64
-
-func (f fn) MethodOnFunc() int64 {
-	return 3465
-}
-
-/*
-// Note: There's a proposal by rsc to remove  -buildmode=shared https://github.com/golang/go/issues/47788
-
-go mod tidy
-make install
-go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go
-/go/bin/dlv exec example/example
-# dlv debug example/main.go # does not work. # we need to update the default debug command to include `-linkshared`
-
-rm -rf example/example && \
+B. build delve and debug the example application
+rm -rf example/example /go/bin/dlv && \
 go mod tidy && \
 make install && \
 go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example example/main.go && \
 /go/bin/dlv exec example/example
 
-break example/main.go:130
-whatis d
-whatis f     // f is a value Type struct
-whatis hReq  // hReq is a pointer Type struct
+C. set breakpoint and execute various `whatis` commands
+break example/main.go:132
+(dlv) continue
+(dlv) whatis -v f
+(dlv) whatis -v hReq
+
+Note:
+1. This is just a demo full of bad half-baked code.
+2. This has only been tested on linux 64bit
+3. For now, it depends on `-buildmode=shared`
+4. There's a proposal by rsc to remove -buildmode=shared https://github.com/golang/go/issues/47788
 */
 func main() {
 	d := Distance(4.8)
@@ -132,4 +86,56 @@ func main() {
 	fmt.Println(f)
 	fmt.Println(hReq)
 	fmt.Println("hey", cool, inter, interTwo, MyFn, myChan, bufmyChan)
+}
+
+// Distance is length in meters
+type Distance float64
+
+func (d Distance) ToCm() float64 {
+	return float64(d) * 100
+}
+func (d *Distance) ToFeet() float64 {
+	return float64(*d) * 3.28084
+}
+
+type Health struct {
+	ID   uint64
+	Date time.Time
+}
+
+type Cooler struct{}
+
+func (d Cooler) Ala() float64 {
+	return 3.28084
+}
+
+type Fire struct {
+	HH        Health
+	Age       int64
+	Name      string
+	Dist      Distance
+	Day       time.Time
+	privField int64
+}
+
+func (f Fire) Hello(i int) string {
+	return strconv.Itoa(i)
+}
+
+func (f *Fire) MethodTwo() int64 {
+	return 78
+}
+
+func (f Fire) privMethod() string {
+	return "A private Method"
+}
+
+type MyInter interface {
+	Read(p []byte) (n int, err error)
+}
+
+type fn func(x int, y string) uint64
+
+func (f fn) MethodOnFunc() int64 {
+	return 3465
 }
