@@ -128,6 +128,14 @@ func (c *Client) ExpectConfigurationDoneResponse(t *testing.T) *dap.Configuratio
 // CheckConfigurationDoneResponse fails the test if m is not *ConfigurationDoneResponse.
 func (c *Client) CheckConfigurationDoneResponse(t *testing.T, m dap.Message) *dap.ConfigurationDoneResponse {
 	t.Helper()
+	oe, ok := m.(*dap.OutputEvent)
+	if !ok {
+		t.Fatalf("got %#v, want *dap.OutputEvent", m)
+	}
+	if oe.Body.Output != "Type 'dlv help' for list of commands.\n" {
+		t.Fatalf("got %#v, want Output=%q", m, "Type 'dlv help' for list of commands.\n")
+	}
+	m = c.ExpectMessage(t)
 	r, ok := m.(*dap.ConfigurationDoneResponse)
 	if !ok {
 		t.Fatalf("got %#v, want *dap.ConfigurationDoneResponse", m)
@@ -441,6 +449,24 @@ func (c *Client) CheckLoadedSourcesResponse(t *testing.T, m dap.Message) *dap.Lo
 	return r
 }
 
+// ExpectMemoryEvent reads a protocol message from the connection
+// and fails the test if the read message is not *MemoryEvent.
+func (c *Client) ExpectMemoryEvent(t *testing.T) *dap.MemoryEvent {
+	t.Helper()
+	m := c.ExpectMessage(t)
+	return c.CheckMemoryEvent(t, m)
+}
+
+// CheckMemoryEvent fails the test if m is not *MemoryEvent.
+func (c *Client) CheckMemoryEvent(t *testing.T, m dap.Message) *dap.MemoryEvent {
+	t.Helper()
+	r, ok := m.(*dap.MemoryEvent)
+	if !ok {
+		t.Fatalf("got %#v, want *dap.MemoryEvent", m)
+	}
+	return r
+}
+
 // ExpectModuleEvent reads a protocol message from the connection
 // and fails the test if the read message is not *ModuleEvent.
 func (c *Client) ExpectModuleEvent(t *testing.T) *dap.ModuleEvent {
@@ -488,14 +514,14 @@ func (c *Client) ExpectNextResponse(t *testing.T) *dap.NextResponse {
 // CheckNextResponse fails the test if m is not *NextResponse.
 func (c *Client) CheckNextResponse(t *testing.T, m dap.Message) *dap.NextResponse {
 	t.Helper()
+	_, ok := m.(*dap.ContinuedEvent)
+	if !ok {
+		t.Fatalf("got %#v, want *dap.ContinuedEvent", m)
+	}
+	m = c.ExpectMessage(t)
 	r, ok := m.(*dap.NextResponse)
 	if !ok {
 		t.Fatalf("got %#v, want *dap.NextResponse", m)
-	}
-	m = c.ExpectMessage(t)
-	_, ok = m.(*dap.ContinuedEvent)
-	if !ok {
-		t.Fatalf("got %#v, want *dap.ContinuedEvent", m)
 	}
 	return r
 }
@@ -907,14 +933,14 @@ func (c *Client) ExpectStepInResponse(t *testing.T) *dap.StepInResponse {
 // CheckStepInResponse fails the test if m is not *StepInResponse.
 func (c *Client) CheckStepInResponse(t *testing.T, m dap.Message) *dap.StepInResponse {
 	t.Helper()
+	_, ok := m.(*dap.ContinuedEvent)
+	if !ok {
+		t.Fatalf("got %#v, want *dap.ContinuedEvent", m)
+	}
+	m = c.ExpectMessage(t)
 	r, ok := m.(*dap.StepInResponse)
 	if !ok {
 		t.Fatalf("got %#v, want *dap.StepInResponse", m)
-	}
-	m = c.ExpectMessage(t)
-	_, ok = m.(*dap.ContinuedEvent)
-	if !ok {
-		t.Fatalf("got %#v, want *dap.ContinuedEvent", m)
 	}
 	return r
 }
@@ -948,14 +974,14 @@ func (c *Client) ExpectStepOutResponse(t *testing.T) *dap.StepOutResponse {
 // CheckStepOutResponse fails the test if m is not *StepOutResponse.
 func (c *Client) CheckStepOutResponse(t *testing.T, m dap.Message) *dap.StepOutResponse {
 	t.Helper()
+	_, ok := m.(*dap.ContinuedEvent)
+	if !ok {
+		t.Fatalf("got %#v, want *dap.ContinuedEvent", m)
+	}
+	m = c.ExpectMessage(t)
 	r, ok := m.(*dap.StepOutResponse)
 	if !ok {
 		t.Fatalf("got %#v, want *dap.StepOutResponse", m)
-	}
-	m = c.ExpectMessage(t)
-	_, ok = m.(*dap.ContinuedEvent)
-	if !ok {
-		t.Fatalf("got %#v, want *dap.ContinuedEvent", m)
 	}
 	return r
 }
@@ -1082,6 +1108,24 @@ func (c *Client) CheckVariablesResponse(t *testing.T, m dap.Message) *dap.Variab
 	r, ok := m.(*dap.VariablesResponse)
 	if !ok {
 		t.Fatalf("got %#v, want *dap.VariablesResponse", m)
+	}
+	return r
+}
+
+// ExpectWriteMemoryResponse reads a protocol message from the connection
+// and fails the test if the read message is not *WriteMemoryResponse.
+func (c *Client) ExpectWriteMemoryResponse(t *testing.T) *dap.WriteMemoryResponse {
+	t.Helper()
+	m := c.ExpectMessage(t)
+	return c.CheckWriteMemoryResponse(t, m)
+}
+
+// CheckWriteMemoryResponse fails the test if m is not *WriteMemoryResponse.
+func (c *Client) CheckWriteMemoryResponse(t *testing.T, m dap.Message) *dap.WriteMemoryResponse {
+	t.Helper()
+	r, ok := m.(*dap.WriteMemoryResponse)
+	if !ok {
+		t.Fatalf("got %#v, want *dap.WriteMemoryResponse", m)
 	}
 	return r
 }

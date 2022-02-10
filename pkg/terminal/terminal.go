@@ -1,6 +1,9 @@
 package terminal
 
+//lint:file-ignore ST1005 errors here can be capitalized
+
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net/rpc"
@@ -10,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/derekparker/trie"
 	"github.com/peterh/liner"
 
 	"github.com/go-delve/delve/pkg/config"
@@ -47,15 +51,14 @@ const (
 
 // Term represents the terminal running dlv.
 type Term struct {
-	client       service.Client
-	conf         *config.Config
-	prompt       string
-	line         *liner.State
-	cmds         *Commands
-	stdout       io.Writer
-	InitFile     string
-	displays     []displayEntry
-	colorEscapes map[colorize.Style]string
+	client   service.Client
+	conf     *config.Config
+	prompt   string
+	line     *liner.State
+	cmds     *Commands
+	stdout   *transcriptWriter
+	InitFile string
+	displays []displayEntry
 
 	historyFile *os.File
 
@@ -96,34 +99,34 @@ func New(client service.Client, conf *config.Config) *Term {
 		prompt: "(dlv) ",
 		line:   liner.NewLiner(),
 		cmds:   cmds,
-		stdout: os.Stdout,
+		stdout: &transcriptWriter{w: os.Stdout},
 	}
 
 	if strings.ToLower(os.Getenv("TERM")) != "dumb" {
-		t.stdout = getColorableWriter()
-		t.colorEscapes = make(map[colorize.Style]string)
-		t.colorEscapes[colorize.NormalStyle] = terminalResetEscapeCode
+		t.stdout.w = getColorableWriter()
+		t.stdout.colorEscapes = make(map[colorize.Style]string)
+		t.stdout.colorEscapes[colorize.NormalStyle] = terminalResetEscapeCode
 		wd := func(s string, defaultCode int) string {
 			if s == "" {
 				return fmt.Sprintf(terminalHighlightEscapeCode, defaultCode)
 			}
 			return s
 		}
-		t.colorEscapes[colorize.KeywordStyle] = conf.SourceListKeywordColor
-		t.colorEscapes[colorize.StringStyle] = wd(conf.SourceListStringColor, ansiBrGreen)
-		t.colorEscapes[colorize.NumberStyle] = conf.SourceListNumberColor
-		t.colorEscapes[colorize.CommentStyle] = wd(conf.SourceListCommentColor, ansiBrMagenta)
-		t.colorEscapes[colorize.ArrowStyle] = wd(conf.SourceListArrowColor, ansiBrYellow)
+		t.stdout.colorEscapes[colorize.KeywordStyle] = conf.SourceListKeywordColor
+		t.stdout.colorEscapes[colorize.StringStyle] = wd(conf.SourceListStringColor, ansiGreen)
+		t.stdout.colorEscapes[colorize.NumberStyle] = conf.SourceListNumberColor
+		t.stdout.colorEscapes[colorize.CommentStyle] = wd(conf.SourceListCommentColor, ansiBrMagenta)
+		t.stdout.colorEscapes[colorize.ArrowStyle] = wd(conf.SourceListArrowColor, ansiYellow)
 		switch x := conf.SourceListLineColor.(type) {
 		case string:
-			t.colorEscapes[colorize.LineNoStyle] = x
+			t.stdout.colorEscapes[colorize.LineNoStyle] = x
 		case int:
 			if (x > ansiWhite && x < ansiBrBlack) || x < ansiBlack || x > ansiBrWhite {
 				x = ansiBlue
 			}
-			t.colorEscapes[colorize.LineNoStyle] = fmt.Sprintf(terminalHighlightEscapeCode, x)
+			t.stdout.colorEscapes[colorize.LineNoStyle] = fmt.Sprintf(terminalHighlightEscapeCode, x)
 		case nil:
-			t.colorEscapes[colorize.LineNoStyle] = fmt.Sprintf(terminalHighlightEscapeCode, ansiBlue)
+			t.stdout.colorEscapes[colorize.LineNoStyle] = fmt.Sprintf(terminalHighlightEscapeCode, ansiBlue)
 		}
 	}
 
@@ -132,13 +135,16 @@ func New(client service.Client, conf *config.Config) *Term {
 		client.SetReturnValuesLoadConfig(&lcfg)
 	}
 
-	t.starlarkEnv = starbind.New(starlarkContext{t})
+	t.starlarkEnv = starbind.New(starlarkContext{t}, t.stdout)
 	return t
 }
 
 // Close returns the terminal to its previous mode.
 func (t *Term) Close() {
 	t.line.Close()
+	if err := t.stdout.CloseTranscript(); err != nil {
+		fmt.Fprintf(os.Stderr, "error closing transcript file: %v\n", err)
+	}
 }
 
 func (t *Term) sigintGuard(ch <-chan os.Signal, multiClient bool) {
@@ -147,7 +153,7 @@ func (t *Term) sigintGuard(ch <-chan os.Signal, multiClient bool) {
 		t.starlarkEnv.Cancel()
 		state, err := t.client.GetStateNonBlocking()
 		if err == nil && state.Recording {
-			fmt.Printf("received SIGINT, stopping recording (will not forward signal)\n")
+			fmt.Fprintf(t.stdout, "received SIGINT, stopping recording (will not forward signal)\n")
 			err := t.client.StopRecording()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -155,7 +161,7 @@ func (t *Term) sigintGuard(ch <-chan os.Signal, multiClient bool) {
 			continue
 		}
 		if err == nil && state.CoreDumping {
-			fmt.Printf("received SIGINT, stopping dump\n")
+			fmt.Fprintf(t.stdout, "received SIGINT, stopping dump\n")
 			err := t.client.CoreDumpCancel()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -186,14 +192,14 @@ func (t *Term) sigintGuard(ch <-chan os.Signal, multiClient bool) {
 					t.Close()
 				}
 			default:
-				fmt.Println("only p or q allowed")
+				fmt.Fprintln(t.stdout, "only p or q allowed")
 			}
 
 		} else {
-			fmt.Printf("received SIGINT, stopping process (will not forward signal)\n")
+			fmt.Fprintf(t.stdout, "received SIGINT, stopping process (will not forward signal)\n")
 			_, err := t.client.Halt()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%v", err)
+				fmt.Fprintf(t.stdout, "%v", err)
 			}
 		}
 	}
@@ -210,21 +216,32 @@ func (t *Term) Run() (int, error) {
 	signal.Notify(ch, syscall.SIGINT)
 	go t.sigintGuard(ch, multiClient)
 
-	t.line.SetCompleter(func(line string) (c []string) {
-		if strings.HasPrefix(line, "break ") || strings.HasPrefix(line, "b ") {
-			filter := line[strings.Index(line, " ")+1:]
-			funcs, _ := t.client.ListFunctions(filter)
-			for _, f := range funcs {
-				c = append(c, "break "+f)
-			}
-			return
+	fns := trie.New()
+	cmds := trie.New()
+	funcs, _ := t.client.ListFunctions("")
+	for _, fn := range funcs {
+		fns.Add(fn, nil)
+	}
+	for _, cmd := range t.cmds.cmds {
+		for _, alias := range cmd.aliases {
+			cmds.Add(alias, nil)
 		}
-		for _, cmd := range t.cmds.cmds {
-			for _, alias := range cmd.aliases {
-				if strings.HasPrefix(alias, strings.ToLower(line)) {
-					c = append(c, alias)
+	}
+
+	t.line.SetCompleter(func(line string) (c []string) {
+		cmd := t.cmds.Find(strings.Split(line, " ")[0], noPrefix)
+		switch cmd.aliases[0] {
+		case "break", "trace", "continue":
+			if spc := strings.LastIndex(line, " "); spc > 0 {
+				prefix := line[:spc] + " "
+				funcs := fns.FuzzySearch(line[spc+1:])
+				for _, f := range funcs {
+					c = append(c, prefix+f)
 				}
 			}
+		case "nullcmd", "nocmd":
+			commands := cmds.FuzzySearch(strings.ToLower(line))
+			c = append(c, commands...)
 		}
 		return
 	})
@@ -264,11 +281,12 @@ func (t *Term) Run() (int, error) {
 		cmdstr, err := t.promptForInput()
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("exit")
+				fmt.Fprintln(t.stdout, "exit")
 				return t.handleExit()
 			}
 			return 1, fmt.Errorf("Prompt for input failed.\n")
 		}
+		t.stdout.Echo(t.prompt + cmdstr + "\n")
 
 		if strings.TrimSpace(cmdstr) == "" {
 			cmdstr = lastCmd
@@ -295,6 +313,8 @@ func (t *Term) Run() (int, error) {
 				fmt.Fprintf(os.Stderr, "Command failed: %s\n", err)
 			}
 		}
+
+		t.stdout.Flush()
 	}
 }
 
@@ -483,10 +503,10 @@ func (t *Term) printDisplay(i int) {
 		if isErrProcessExited(err) {
 			return
 		}
-		fmt.Printf("%d: %s = error %v\n", i, expr, err)
+		fmt.Fprintf(t.stdout, "%d: %s = error %v\n", i, expr, err)
 		return
 	}
-	fmt.Printf("%d: %s = %s\n", i, val.Name, val.SinglelineStringFormatted(fmtstr))
+	fmt.Fprintf(t.stdout, "%d: %s = %s\n", i, val.Name, val.SinglelineStringFormatted(fmtstr))
 }
 
 func (t *Term) printDisplays() {
@@ -519,8 +539,90 @@ func (t *Term) longCommandCanceled() bool {
 	return t.longCommandCancelFlag
 }
 
+// RedirectTo redirects the output of this terminal to the specified writer.
+func (t *Term) RedirectTo(w io.Writer) {
+	t.stdout.w = w
+}
+
 // isErrProcessExited returns true if `err` is an RPC error equivalent of proc.ErrProcessExited
 func isErrProcessExited(err error) bool {
 	rpcError, ok := err.(rpc.ServerError)
 	return ok && strings.Contains(rpcError.Error(), "has exited with status")
+}
+
+// transcriptWriter writes to a io.Writer and also, optionally, to a
+// buffered file.
+type transcriptWriter struct {
+	fileOnly     bool
+	w            io.Writer
+	file         *bufio.Writer
+	fh           io.Closer
+	colorEscapes map[colorize.Style]string
+}
+
+func (w *transcriptWriter) Write(p []byte) (nn int, err error) {
+	if !w.fileOnly {
+		nn, err = w.w.Write(p)
+	}
+	if err == nil {
+		if w.file != nil {
+			return w.file.Write(p)
+		}
+	}
+	return
+}
+
+// ColorizePrint prints to out a syntax highlighted version of the text read from
+// reader, between lines startLine and endLine.
+func (w *transcriptWriter) ColorizePrint(path string, reader io.ReadSeeker, startLine, endLine, arrowLine int) error {
+	var err error
+	if !w.fileOnly {
+		err = colorize.Print(w.w, path, reader, startLine, endLine, arrowLine, w.colorEscapes)
+	}
+	if err == nil {
+		if w.file != nil {
+			reader.Seek(0, io.SeekStart)
+			return colorize.Print(w.file, path, reader, startLine, endLine, arrowLine, nil)
+		}
+	}
+	return err
+}
+
+// Echo outputs str only to the optional transcript file.
+func (w *transcriptWriter) Echo(str string) {
+	if w.file != nil {
+		w.file.WriteString(str)
+	}
+}
+
+// Flush flushes the optional transcript file.
+func (w *transcriptWriter) Flush() {
+	if w.file != nil {
+		w.file.Flush()
+	}
+}
+
+// CloseTranscript closes the optional transcript file.
+func (w *transcriptWriter) CloseTranscript() error {
+	if w.file == nil {
+		return nil
+	}
+	w.file.Flush()
+	w.fileOnly = false
+	err := w.fh.Close()
+	w.file = nil
+	w.fh = nil
+	return err
+}
+
+// TranscribeTo starts transcribing the output to the specified file. If
+// fileOnly is true the output will only go to the file, output to the
+// io.Writer will be suppressed.
+func (w *transcriptWriter) TranscribeTo(fh io.WriteCloser, fileOnly bool) {
+	if w.file == nil {
+		w.CloseTranscript()
+	}
+	w.fh = fh
+	w.file = bufio.NewWriter(fh)
+	w.fileOnly = fileOnly
 }

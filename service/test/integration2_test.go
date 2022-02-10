@@ -196,7 +196,7 @@ func TestRestart_duringStop(t *testing.T) {
 		if c.ProcessPid() == origPid {
 			t.Fatal("did not spawn new process, has same PID")
 		}
-		bps, err := c.ListBreakpoints()
+		bps, err := c.ListBreakpoints(false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -510,6 +510,7 @@ func TestClientServer_clearBreakpoint(t *testing.T) {
 func TestClientServer_toggleBreakpoint(t *testing.T) {
 	withTestClient2("testtoggle", t, func(c service.Client) {
 		toggle := func(bp *api.Breakpoint) {
+			t.Helper()
 			dbp, err := c.ToggleBreakpoint(bp.ID)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
@@ -610,6 +611,121 @@ func TestClientServer_toggleAmendedBreakpoint(t *testing.T) {
 		}
 		if amended.Cond == "" {
 			t.Fatal("breakpoint amendedments not preserved after toggle")
+		}
+	})
+}
+
+func TestClientServer_disableHitCondLSSBreakpoint(t *testing.T) {
+	withTestClient2("break", t, func(c service.Client) {
+		fp := testProgPath(t, "break")
+		hitCondBp, err := c.CreateBreakpoint(&api.Breakpoint{
+			File:    fp,
+			Line:    7,
+			HitCond: "< 3",
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		state := <-c.Continue()
+		if state.Err != nil {
+			t.Fatalf("Unexpected error: %v, state: %#v", state.Err, state)
+		}
+
+		f, l := state.CurrentThread.File, state.CurrentThread.Line
+		if f != "break.go" && l != 7 {
+			t.Fatal("Program did not hit breakpoint")
+		}
+
+		ivar, err := c.EvalVariable(api.EvalScope{GoroutineID: -1}, "i", normalLoadConfig)
+		assertNoError(err, t, "EvalVariable")
+
+		t.Logf("ivar: %s", ivar.SinglelineString())
+
+		if ivar.Value != "1" {
+			t.Fatalf("Wrong variable value: %s", ivar.Value)
+		}
+
+		bp, err := c.GetBreakpoint(hitCondBp.ID)
+		assertNoError(err, t, "GetBreakpoint()")
+
+		if bp.Disabled {
+			t.Fatalf(
+				"Hit condition %s is still satisfiable but breakpoint has been disabled",
+				bp.HitCond,
+			)
+		}
+
+		state = <-c.Continue()
+		if state.Err != nil {
+			t.Fatalf("Unexpected error: %v, state: %#v", state.Err, state)
+		}
+
+		f, l = state.CurrentThread.File, state.CurrentThread.Line
+		if f != "break.go" && l != 7 {
+			t.Fatal("Program did not hit breakpoint")
+		}
+
+		ivar, err = c.EvalVariable(api.EvalScope{GoroutineID: -1}, "i", normalLoadConfig)
+		assertNoError(err, t, "EvalVariable")
+
+		t.Logf("ivar: %s", ivar.SinglelineString())
+
+		if ivar.Value != "2" {
+			t.Fatalf("Wrong variable value: %s", ivar.Value)
+		}
+
+		bp, err = c.GetBreakpoint(hitCondBp.ID)
+		assertNoError(err, t, "GetBreakpoint()")
+
+		if !bp.Disabled {
+			t.Fatalf(
+				"Hit condition %s is no more satisfiable but breakpoint has not been disabled",
+				bp.HitCond,
+			)
+		}
+	})
+}
+
+func TestClientServer_disableHitEQLCondBreakpoint(t *testing.T) {
+	withTestClient2("break", t, func(c service.Client) {
+		fp := testProgPath(t, "break")
+		hitCondBp, err := c.CreateBreakpoint(&api.Breakpoint{
+			File:    fp,
+			Line:    7,
+			HitCond: "== 3",
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		state := <-c.Continue()
+		if state.Err != nil {
+			t.Fatalf("Unexpected error: %v, state: %#v", state.Err, state)
+		}
+
+		f, l := state.CurrentThread.File, state.CurrentThread.Line
+		if f != "break.go" && l != 7 {
+			t.Fatal("Program did not hit breakpoint")
+		}
+
+		ivar, err := c.EvalVariable(api.EvalScope{GoroutineID: -1}, "i", normalLoadConfig)
+		assertNoError(err, t, "EvalVariable")
+
+		t.Logf("ivar: %s", ivar.SinglelineString())
+
+		if ivar.Value != "3" {
+			t.Fatalf("Wrong variable value: %s", ivar.Value)
+		}
+
+		bp, err := c.GetBreakpoint(hitCondBp.ID)
+		assertNoError(err, t, "GetBreakpoint()")
+
+		if !bp.Disabled {
+			t.Fatalf(
+				"Hit condition %s is no more satisfiable but breakpoint has not been disabled",
+				bp.HitCond,
+			)
 		}
 	})
 }
@@ -946,6 +1062,76 @@ func TestClientServer_FindLocations(t *testing.T) {
 			findLocationHelper(t, c, "dirio.SomeFunction:0", false, 1, someFuncLoc)
 		})
 	}
+
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 18) {
+		withTestClient2("locationsprog_generic", t, func(c service.Client) {
+			const (
+				methodLine = "locationsprog_generic.go:9"
+				funcLine   = "locationsprog_generic.go:13"
+				funcLine2  = "locationsprog_generic.go:14"
+			)
+			methodLoc := findLocationHelper2(t, c, methodLine, nil)
+			if len(methodLoc.PCs) != 2 {
+				// we didn't get both instantiations of the method
+				t.Errorf("wrong number of PCs for %s: %#x", methodLine, methodLoc.PCs)
+			}
+
+			funcLoc := findLocationHelper2(t, c, funcLine, nil)
+			if len(funcLoc.PCs) != 2 {
+				// we didn't get both instantiations of the function
+				t.Errorf("wrong number of PCs for %s: %#x", funcLine, funcLoc.PCs)
+			}
+
+			funcLoc2 := findLocationHelper2(t, c, funcLine2, nil)
+			if len(funcLoc2.PCs) != 2 {
+				t.Errorf("wrong number of PCs for %s: %#x", funcLine2, funcLoc2.PCs)
+			}
+
+			findLocationHelper2(t, c, "main.ParamFunc", funcLoc)
+
+			findLocationHelper2(t, c, "ParamFunc", funcLoc)
+
+			findLocationHelper2(t, c, "main.ParamReceiver.Amethod", methodLoc)
+			findLocationHelper2(t, c, "main.Amethod", methodLoc)
+			findLocationHelper2(t, c, "ParamReceiver.Amethod", methodLoc)
+			findLocationHelper2(t, c, "Amethod", methodLoc)
+
+			findLocationHelper2(t, c, "main.(*ParamReceiver).Amethod", methodLoc)
+			findLocationHelper2(t, c, "(*ParamReceiver).Amethod", methodLoc)
+
+			findLocationHelper2(t, c, "main.(*ParamReceiver).Amethod", methodLoc)
+			findLocationHelper2(t, c, "(*ParamReceiver).Amethod", methodLoc)
+
+			findLocationHelper2(t, c, "main.ParamFunc:1", funcLoc2)
+		})
+	}
+}
+
+func findLocationHelper2(t *testing.T, c service.Client, loc string, checkLoc *api.Location) *api.Location {
+	locs, err := c.FindLocation(api.EvalScope{GoroutineID: -1}, loc, false, nil)
+	if err != nil {
+		t.Fatalf("FindLocation(%q) -> error %v", loc, err)
+	}
+	t.Logf("FindLocation(%q) → %v\n", loc, locs)
+	if len(locs) != 1 {
+		t.Logf("Wrong number of locations returned for location %q (got %d expected 1)", loc, len(locs))
+	}
+
+	if checkLoc == nil {
+		return &locs[0]
+	}
+
+	if len(checkLoc.PCs) != len(locs[0].PCs) {
+		t.Fatalf("Wrong number of PCs returned (got %#x expected %#x)", locs[0].PCs, checkLoc.PCs)
+	}
+
+	for i := range checkLoc.PCs {
+		if checkLoc.PCs[i] != locs[0].PCs[i] {
+			t.Fatalf("Wrong PCs returned (got %#x expected %#x)", locs[0].PCs, checkLoc.PCs)
+		}
+	}
+
+	return &locs[0]
 }
 
 func TestClientServer_FindLocationsAddr(t *testing.T) {
@@ -1021,6 +1207,12 @@ func TestClientServer_FullStacktrace(t *testing.T) {
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 		t.Skip("cgo doesn't work on darwin/arm64")
 	}
+
+	lenient := false
+	if runtime.GOOS == "windows" {
+		lenient = true
+	}
+
 	withTestClient2("goroutinestackprog", t, func(c service.Client) {
 		_, err := c.CreateBreakpoint(&api.Breakpoint{FunctionName: "main.stacktraceme", Line: -1})
 		assertNoError(err, t, "CreateBreakpoint()")
@@ -1059,7 +1251,11 @@ func TestClientServer_FullStacktrace(t *testing.T) {
 
 		for i := range found {
 			if !found[i] {
-				t.Fatalf("Goroutine %d not found", i)
+				if lenient {
+					lenient = false
+				} else {
+					t.Fatalf("Goroutine %d not found", i)
+				}
 			}
 		}
 
@@ -1630,7 +1826,7 @@ func TestClientServer_RestartBreakpointPosition(t *testing.T) {
 		assertNoError(err, t, "Halt")
 		_, err = c.Restart(false)
 		assertNoError(err, t, "Restart")
-		bps, err := c.ListBreakpoints()
+		bps, err := c.ListBreakpoints(false)
 		assertNoError(err, t, "ListBreakpoints")
 		for _, bp := range bps {
 			if bp.Name == bpBefore.Name {
@@ -1891,6 +2087,39 @@ func TestAcceptMulticlient(t *testing.T) {
 	<-serverDone
 }
 
+func TestForceStopWhileContinue(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("couldn't start listener: %s\n", err)
+	}
+	serverStopped := make(chan struct{})
+	disconnectChan := make(chan struct{})
+	go func() {
+		defer close(serverStopped)
+		defer listener.Close()
+		server := rpccommon.NewServer(&service.Config{
+			Listener:       listener,
+			ProcessArgs:    []string{protest.BuildFixture("http_server", protest.AllNonOptimized).Path},
+			AcceptMulti:    true,
+			DisconnectChan: disconnectChan,
+			Debugger: debugger.Config{
+				Backend: "default",
+			},
+		})
+		if err := server.Run(); err != nil {
+			panic(err)
+		}
+		<-disconnectChan
+		server.Stop()
+	}()
+
+	client := rpc2.NewClient(listener.Addr().String())
+	client.Disconnect(true /*continue*/)
+	time.Sleep(10 * time.Millisecond) // give server time to start running
+	close(disconnectChan)             // stop the server
+	<-serverStopped                   // Stop() didn't block on detach because we halted first
+}
+
 func TestClientServerFunctionCall(t *testing.T) {
 	protest.MustSupportFunctionCalls(t, testBackend)
 	withTestClient2("fncall", t, func(c service.Client) {
@@ -2137,7 +2366,7 @@ func TestDoubleCreateBreakpoint(t *testing.T) {
 		_, err := c.CreateBreakpoint(&api.Breakpoint{FunctionName: "main.main", Line: 1, Name: "firstbreakpoint", Tracepoint: true})
 		assertNoError(err, t, "CreateBreakpoint 1")
 
-		bps, err := c.ListBreakpoints()
+		bps, err := c.ListBreakpoints(false)
 		assertNoError(err, t, "ListBreakpoints 1")
 
 		t.Logf("breakpoints before second call:")
@@ -2150,7 +2379,7 @@ func TestDoubleCreateBreakpoint(t *testing.T) {
 		_, err = c.CreateBreakpoint(&api.Breakpoint{FunctionName: "main.main", Line: 1, Name: "secondbreakpoint", Tracepoint: true})
 		assertError(err, t, "CreateBreakpoint 2") // breakpoint exists
 
-		bps, err = c.ListBreakpoints()
+		bps, err = c.ListBreakpoints(false)
 		assertNoError(err, t, "ListBreakpoints 2")
 
 		t.Logf("breakpoints after second call:")
@@ -2200,7 +2429,7 @@ func TestClearLogicalBreakpoint(t *testing.T) {
 		}
 		_, err = c.ClearBreakpoint(bp.ID)
 		assertNoError(err, t, "ClearBreakpoint()")
-		bps, err := c.ListBreakpoints()
+		bps, err := c.ListBreakpoints(false)
 		assertNoError(err, t, "ListBreakpoints()")
 		for _, curbp := range bps {
 			if curbp.ID == bp.ID {
@@ -2321,7 +2550,7 @@ func TestDetachLeaveRunning(t *testing.T) {
 
 func assertNoDuplicateBreakpoints(t *testing.T, c service.Client) {
 	t.Helper()
-	bps, _ := c.ListBreakpoints()
+	bps, _ := c.ListBreakpoints(false)
 	seen := make(map[int]bool)
 	for _, bp := range bps {
 		t.Logf("%#v\n", bp)
@@ -2438,6 +2667,103 @@ func TestLongStringArg(t *testing.T) {
 		saddr2 := test("s", "very long string 01234567890123456789012345678901234567890123456", "7890123456789012345678901234567890123456789X")
 		if saddr != saddr2 {
 			t.Fatalf("address of s changed (%#x %#x)", saddr, saddr2)
+		}
+	})
+}
+
+func TestGenericsBreakpoint(t *testing.T) {
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 18) {
+		t.Skip("generics")
+	}
+	// Tests that setting breakpoints inside a generic function with multiple
+	// instantiations results in a single logical breakpoint with N physical
+	// breakpoints (N = number of instantiations).
+	withTestClient2("genericbp", t, func(c service.Client) {
+		fp := testProgPath(t, "genericbp")
+		bp, err := c.CreateBreakpoint(&api.Breakpoint{File: fp, Line: 6})
+		assertNoError(err, t, "CreateBreakpoint")
+		if len(bp.Addrs) != 2 {
+			t.Fatalf("wrong number of physical breakpoints: %d", len(bp.Addrs))
+		}
+
+		frame1Line := func() int {
+			frames, err := c.Stacktrace(-1, 10, 0, nil)
+			assertNoError(err, t, "Stacktrace")
+			return frames[1].Line
+		}
+
+		state := <-c.Continue()
+		assertNoError(state.Err, t, "Continue")
+		if line := frame1Line(); line != 10 {
+			t.Errorf("wrong line after first continue, expected 10, got %d", line)
+		}
+
+		state = <-c.Continue()
+		assertNoError(state.Err, t, "Continue")
+		if line := frame1Line(); line != 11 {
+			t.Errorf("wrong line after first continue, expected 11, got %d", line)
+		}
+
+		if bp.FunctionName != "main.testfn" {
+			t.Errorf("wrong name for breakpoint (CreateBreakpoint): %q", bp.FunctionName)
+		}
+
+		bps, err := c.ListBreakpoints(false)
+		assertNoError(err, t, "ListBreakpoints")
+
+		for _, bp := range bps {
+			if bp.ID > 0 {
+				if bp.FunctionName != "main.testfn" {
+					t.Errorf("wrong name for breakpoint (ListBreakpoints): %q", bp.FunctionName)
+				}
+				break
+			}
+		}
+
+		rmbp, err := c.ClearBreakpoint(bp.ID)
+		assertNoError(err, t, "ClearBreakpoint")
+		if rmbp.FunctionName != "main.testfn" {
+			t.Errorf("wrong name for breakpoint (ClearBreakpoint): %q", rmbp.FunctionName)
+		}
+	})
+}
+
+func TestRestartRewindAfterEnd(t *testing.T) {
+	if testBackend != "rr" {
+		t.Skip("not relevant")
+	}
+	// Check that Restart works after the program has terminated, even if a
+	// Continue is requested just before it.
+	// Also check that Rewind can be used after the program has terminated.
+	protest.AllowRecording(t)
+	withTestClient2("math", t, func(c service.Client) {
+		state := <-c.Continue()
+		if !state.Exited {
+			t.Fatalf("program did not exit")
+		}
+		state = <-c.Continue()
+		if !state.Exited {
+			t.Errorf("bad Continue return state: %v", state)
+		}
+		time.Sleep(1 * time.Second) // bug only happens if there is some time for the server to close the notify channel
+		_, err := c.Restart(false)
+		if err != nil {
+			t.Fatalf("Restart: %v", err)
+		}
+		state = <-c.Continue()
+		if !state.Exited {
+			t.Fatalf("program did not exit exited")
+		}
+		_, err = c.CreateBreakpoint(&api.Breakpoint{FunctionName: "main.main", Line: 0})
+		if err != nil {
+			t.Fatalf("CreateBreakpoint: %v", err)
+		}
+		state = <-c.Rewind()
+		if state.Exited || state.Err != nil {
+			t.Errorf("bad Rewind return state: %v", state)
+		}
+		if state.CurrentThread.Line != 7 {
+			t.Errorf("wrong stop location %s:%d", state.CurrentThread.File, state.CurrentThread.Line)
 		}
 	})
 }

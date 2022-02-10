@@ -16,7 +16,7 @@ Command | Description
 [rebuild](#rebuild) | Rebuild the target executable and restarts it. It does not work if the executable was not built by delve.
 [restart](#restart) | Restart process.
 [rev](#rev) | Reverses the execution of the target program for the command specified.
-[rewind](#rewind) | Run backwards until breakpoint or program termination.
+[rewind](#rewind) | Run backwards until breakpoint or start of recorded history.
 [step](#step) | Single step through program.
 [step-instruction](#step-instruction) | Single step a single cpu instruction.
 [stepout](#stepout) | Step out of the current function.
@@ -43,7 +43,7 @@ Command | Description
 --------|------------
 [args](#args) | Print function arguments.
 [display](#display) | Print value of an expression every time the program stops.
-[examinemem](#examinemem) | Examine memory:
+[examinemem](#examinemem) | Examine raw memory at the given address.
 [locals](#locals) | Print local variables.
 [print](#print) | Evaluate an expression.
 [regs](#regs) | Print contents of CPU registers.
@@ -91,6 +91,7 @@ Command | Description
 [list](#list) | Show source code.
 [source](#source) | Executes a file containing a list of delve commands
 [sources](#sources) | Print list of source files.
+[transcript](#transcript) | Appends command output to a file.
 [types](#types) | Print list of types
 
 ## args
@@ -104,9 +105,9 @@ If regex is specified only function arguments with a name matching it will be re
 ## break
 Sets a breakpoint.
 
-	break [name] <linespec>
+	break [name] [linespec]
 
-See [Documentation/cli/locspec.md](//github.com/go-delve/delve/tree/master/Documentation/cli/locspec.md) for the syntax of linespec.
+See [Documentation/cli/locspec.md](//github.com/go-delve/delve/tree/master/Documentation/cli/locspec.md) for the syntax of linespec. If linespec is omitted a breakpoint will be set on the current line.
 
 See also: "help on", "help cond" and "help clear"
 
@@ -114,6 +115,10 @@ Aliases: b
 
 ## breakpoints
 Print out info for active breakpoints.
+	
+	breakpoints [-a]
+
+Specifying -a prints all physical breakpoint, including internal breakpoints.
 
 Aliases: bp
 
@@ -178,6 +183,8 @@ Set breakpoint condition.
 
 Specifies that the breakpoint, tracepoint or watchpoint should break only if the boolean expression is true.
 
+See Documentation/cli/expr.md for a description of supported expressions.
+
 With the -hitcount option a condition on the breakpoint hit count can be set, the following operators are supported
 
 	condition -hitcount bp > n
@@ -189,6 +196,11 @@ With the -hitcount option a condition on the breakpoint hit count can be set, th
 	condition -hitcount bp % n
 	
 The '% n' form means we should stop at the breakpoint when the hitcount is a multiple of n.
+
+Examples:
+	cond 2 i == 10				breakpoint 2 will stop when variable i equals 10
+	cond name runtime.curg.goid == 5	breakpoint 'name' will stop only on goroutine 5
+
 
 Aliases: cond
 
@@ -291,6 +303,8 @@ If locspec is omitted edit will open the current source file in the editor, othe
 Aliases: ed
 
 ## examinemem
+Examine raw memory at the given address.
+
 Examine memory:
 
 	examinemem [-fmt <format>] [-count|-len <count>] [-size <size>] <address>
@@ -464,9 +478,18 @@ Aliases: n
 ## on
 Executes a command when a breakpoint is hit.
 
-	on <breakpoint name or id> <command>.
+	on <breakpoint name or id> <command>
+	on <breakpoint name or id> -edit
+	
 
-Supported commands: print, stack and goroutine)
+Supported commands: print, stack, goroutine, trace and cond. 
+To convert a breakpoint into a tracepoint use:
+	
+	on <breakpoint name or id> trace
+
+The command 'on <bp> cond <cond-arguments>' is equivalent to 'cond <bp> <cond-arguments>'.
+
+The command 'on x -edit' can be used to edit the list of commands executed when the breakpoint is hit.
 
 
 ## print
@@ -474,7 +497,7 @@ Evaluate an expression.
 
 	[goroutine <n>] [frame <m>] print [%format] <expression>
 
-See [Documentation/cli/expr.md](//github.com/go-delve/delve/tree/master/Documentation/cli/expr.md) for a description of supported expressions.
+See Documentation/cli/expr.md for a description of supported expressions.
 
 The optional format argument is a format specifier, like the ones used by the fmt package. For example "print %x v" will print v as an hexadecimal number.
 
@@ -489,7 +512,7 @@ Print contents of CPU registers.
 
 	regs [-a]
 
-Argument -a shows more registers. Individual registers can also be displayed by 'print' and 'display'. See [Documentation/cli/expr.md.](//github.com/go-delve/delve/tree/master/Documentation/cli/expr.md.)
+Argument -a shows more registers. Individual registers can also be displayed by 'print' and 'display'. See Documentation/cli/expr.md.
 
 
 ## restart
@@ -523,7 +546,7 @@ Currently, only the rev step-instruction command is supported.
 
 
 ## rewind
-Run backwards until breakpoint or program termination.
+Run backwards until breakpoint or start of recorded history.
 
 Aliases: rw
 
@@ -532,7 +555,7 @@ Changes the value of a variable.
 
 	[goroutine <n>] [frame <m>] set <variable> = <value>
 
-See [Documentation/cli/expr.md](//github.com/go-delve/delve/tree/master/Documentation/cli/expr.md) for a description of supported expressions. Only numerical variables and pointers can be changed.
+See Documentation/cli/expr.md for a description of supported expressions. Only numerical variables and pointers can be changed.
 
 
 ## source
@@ -606,13 +629,24 @@ toggle <breakpoint name or id>
 ## trace
 Set tracepoint.
 
-	trace [name] <linespec>
+	trace [name] [linespec]
 
-A tracepoint is a breakpoint that does not stop the execution of the program, instead when the tracepoint is hit a notification is displayed. See [Documentation/cli/locspec.md](//github.com/go-delve/delve/tree/master/Documentation/cli/locspec.md) for the syntax of linespec.
+A tracepoint is a breakpoint that does not stop the execution of the program, instead when the tracepoint is hit a notification is displayed. See [Documentation/cli/locspec.md](//github.com/go-delve/delve/tree/master/Documentation/cli/locspec.md) for the syntax of linespec. If linespec is omitted a tracepoint will be set on the current line.
 
 See also: "help on", "help cond" and "help clear"
 
 Aliases: t
+
+## transcript
+Appends command output to a file.
+
+	transcript [-t] [-x] <output file>
+	transcript -off
+
+Output of Delve's command is appended to the specified output file. If '-t' is specified and the output file exists it is truncated. If '-x' is specified output to stdout is suppressed instead.
+
+Using the -off option disables the transcript.
+
 
 ## types
 Print list of types
@@ -653,6 +687,8 @@ The memory location is specified with the same expression language used by 'prin
 	watch v
 
 will watch the address of variable 'v'.
+
+Note that writes that do not change the value of the watched memory address might not be reported.
 
 See also: "help print".
 

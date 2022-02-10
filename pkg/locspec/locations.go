@@ -68,6 +68,7 @@ func Parse(locStr string) (LocationSpec, error) {
 	rest := locStr
 
 	malformed := func(reason string) error {
+		//lint:ignore ST1005 backwards compatibility
 		return fmt.Errorf("Malformed breakpoint location \"%s\" at %d: %s", locStr, len(locStr)-len(rest), reason)
 	}
 
@@ -107,6 +108,7 @@ func Parse(locStr string) (LocationSpec, error) {
 
 func parseLocationSpecDefault(locStr, rest string) (LocationSpec, error) {
 	malformed := func(reason string) error {
+		//lint:ignore ST1005 backwards compatibility
 		return fmt.Errorf("Malformed breakpoint location \"%s\" at %d: %s", locStr, len(locStr)-len(rest), reason)
 	}
 
@@ -230,7 +232,7 @@ func stripReceiverDecoration(in string) string {
 }
 
 // Match will return whether the provided function matches the location spec.
-func (spec *FuncLocationSpec) Match(sym proc.Function, packageMap map[string][]string) bool {
+func (spec *FuncLocationSpec) Match(sym *proc.Function, packageMap map[string][]string) bool {
 	if spec.BaseName != sym.BaseName() {
 		return false
 	}
@@ -384,21 +386,8 @@ func (loc *NormalLocationSpec) Find(t *proc.Target, processArgs []string, scope 
 	limit -= len(candidateFiles)
 
 	var candidateFuncs []string
-	if loc.FuncBase != nil {
-		for _, f := range scope.BinInfo.Functions {
-			if !loc.FuncBase.Match(f, scope.BinInfo.PackageMap) {
-				continue
-			}
-			if loc.Base == f.Name {
-				// if an exact match for the function name is found use it
-				candidateFuncs = []string{f.Name}
-				break
-			}
-			candidateFuncs = append(candidateFuncs, f.Name)
-			if len(candidateFuncs) >= limit {
-				break
-			}
-		}
+	if loc.FuncBase != nil && limit > 0 {
+		candidateFuncs = loc.findFuncCandidates(scope, limit)
 	}
 
 	if matching := len(candidateFiles) + len(candidateFuncs); matching == 0 {
@@ -420,6 +409,7 @@ func (loc *NormalLocationSpec) Find(t *proc.Target, processArgs []string, scope 
 	var err error
 	if len(candidateFiles) == 1 {
 		if loc.LineOffset < 0 {
+			//lint:ignore ST1005 backwards compatibility
 			return nil, fmt.Errorf("Malformed breakpoint location, no line offset specified")
 		}
 		addrs, err = proc.FindFileLocation(t, candidateFiles[0], loc.LineOffset)
@@ -436,6 +426,49 @@ func (loc *NormalLocationSpec) Find(t *proc.Target, processArgs []string, scope 
 		return nil, err
 	}
 	return []api.Location{addressesToLocation(addrs)}, nil
+}
+
+func (loc *NormalLocationSpec) findFuncCandidates(scope *proc.EvalScope, limit int) []string {
+	candidateFuncs := map[string]struct{}{}
+	// See if it matches generic functions first
+	for fname := range scope.BinInfo.LookupGenericFunc() {
+		if len(candidateFuncs) >= limit {
+			break
+		}
+		if !loc.FuncBase.Match(&proc.Function{Name: fname}, scope.BinInfo.PackageMap) {
+			continue
+		}
+		if loc.Base == fname {
+			return []string{fname}
+		}
+		candidateFuncs[fname] = struct{}{}
+	}
+	for _, f := range scope.BinInfo.LookupFunc {
+		if len(candidateFuncs) >= limit {
+			break
+		}
+		if !loc.FuncBase.Match(f, scope.BinInfo.PackageMap) {
+			continue
+		}
+		if loc.Base == f.Name {
+			// if an exact match for the function name is found use it
+			return []string{f.Name}
+		}
+		// If f is an instantiation of a generic function see if we should add its generic version instead.
+		if gn := f.NameWithoutTypeParams(); gn != "" {
+			if _, alreadyAdded := candidateFuncs[gn]; !alreadyAdded {
+				candidateFuncs[f.Name] = struct{}{}
+			}
+		} else {
+			candidateFuncs[f.Name] = struct{}{}
+		}
+	}
+	// convert candidateFuncs map into an array of its keys
+	r := make([]string, 0, len(candidateFuncs))
+	for s := range candidateFuncs {
+		r = append(r, s)
+	}
+	return r
 }
 
 func crossPlatformPath(path string) string {

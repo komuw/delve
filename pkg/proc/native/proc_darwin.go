@@ -1,4 +1,5 @@
-//+build darwin,macnative
+//go:build darwin && macnative
+// +build darwin,macnative
 
 package native
 
@@ -18,6 +19,7 @@ import (
 	sys "golang.org/x/sys/unix"
 
 	"github.com/go-delve/delve/pkg/proc"
+	"github.com/go-delve/delve/pkg/proc/internal/ebpf"
 	"github.com/go-delve/delve/pkg/proc/macutil"
 )
 
@@ -33,6 +35,8 @@ type osProcessDetails struct {
 	// exception and notification ports.
 	portSet C.mach_port_t
 }
+
+func (os *osProcessDetails) Close() {}
 
 // Launch creates and begins debugging a new process. Uses a
 // custom fork/exec process in order to take advantage of
@@ -431,7 +435,7 @@ func (dbp *nativeProcess) resume() error {
 // stop stops all running threads and sets breakpoints
 func (dbp *nativeProcess) stop(trapthread *nativeThread) (*nativeThread, error) {
 	if dbp.exited {
-		return nil, proc.ErrProcessExited{Pid: dbp.Pid()}
+		return nil, proc.ErrProcessExited{Pid: dbp.pid}
 	}
 	for _, th := range dbp.threads {
 		if !th.Stopped() {
@@ -467,6 +471,18 @@ func (dbp *nativeProcess) detach(kill bool) error {
 func (dbp *nativeProcess) EntryPoint() (uint64, error) {
 	//TODO(aarzilli): implement this
 	return 0, nil
+}
+
+func (dbp *nativeProcess) SupportsBPF() bool {
+	return false
+}
+
+func (dbp *nativeProcess) SetUProbe(fnName string, goidOffset int64, args []ebpf.UProbeArgMap) error {
+	panic("not implemented")
+}
+
+func (dbp *nativeProcess) GetBufferedTracepoints() []ebpf.RawUProbeParams {
+	panic("not implemented")
 }
 
 func initialize(dbp *nativeProcess) error { return nil }

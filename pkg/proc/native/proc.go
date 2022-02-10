@@ -46,8 +46,6 @@ type nativeProcess struct {
 	exited, detached bool
 }
 
-var _ proc.ProcessInternal = &nativeProcess{}
-
 // newProcess returns an initialized Process struct. Before returning,
 // it will also launch a goroutine in order to handle ptrace(2)
 // functions. For more information, see the documentation on
@@ -72,39 +70,8 @@ func (dbp *nativeProcess) BinInfo() *proc.BinaryInfo {
 	return dbp.bi
 }
 
-// Recorded always returns false for the native proc backend.
-func (dbp *nativeProcess) Recorded() (bool, string) { return false, "" }
-
-// Restart will always return an error in the native proc backend, only for
-// recorded traces.
-func (dbp *nativeProcess) Restart(string) (proc.Thread, error) { return nil, proc.ErrNotRecorded }
-
-// ChangeDirection will always return an error in the native proc backend, only for
-// recorded traces.
-func (dbp *nativeProcess) ChangeDirection(dir proc.Direction) error {
-	if dir != proc.Forward {
-		return proc.ErrNotRecorded
-	}
-	return nil
-}
-
-// GetDirection will always return Forward.
-func (p *nativeProcess) GetDirection() proc.Direction { return proc.Forward }
-
-// When will always return an empty string and nil, not supported on native proc backend.
-func (dbp *nativeProcess) When() (string, error) { return "", nil }
-
-// Checkpoint will always return an error on the native proc backend,
-// only supported for recorded traces.
-func (dbp *nativeProcess) Checkpoint(string) (int, error) { return -1, proc.ErrNotRecorded }
-
-// Checkpoints will always return an error on the native proc backend,
-// only supported for recorded traces.
-func (dbp *nativeProcess) Checkpoints() ([]proc.Checkpoint, error) { return nil, proc.ErrNotRecorded }
-
-// ClearCheckpoint will always return an error on the native proc backend,
-// only supported in recorded traces.
-func (dbp *nativeProcess) ClearCheckpoint(int) error { return proc.ErrNotRecorded }
+// StartCallInjection notifies the backend that we are about to inject a function call.
+func (dbp *nativeProcess) StartCallInjection() (func(), error) { return func() {}, nil }
 
 // Detach from the process being debugged, optionally killing it.
 func (dbp *nativeProcess) Detach(kill bool) (err error) {
@@ -140,7 +107,7 @@ func (dbp *nativeProcess) Valid() (bool, error) {
 		return false, proc.ErrProcessDetached
 	}
 	if dbp.exited {
-		return false, proc.ErrProcessExited{Pid: dbp.Pid()}
+		return false, proc.ErrProcessExited{Pid: dbp.pid}
 	}
 	return true, nil
 }
@@ -149,11 +116,6 @@ func (dbp *nativeProcess) Valid() (bool, error) {
 // ContinueOnce finishes resuming the target.
 func (dbp *nativeProcess) ResumeNotify(ch chan<- struct{}) {
 	dbp.resumeChan = ch
-}
-
-// Pid returns the process ID.
-func (dbp *nativeProcess) Pid() int {
-	return dbp.pid
 }
 
 // ThreadList returns a list of threads in the process.
@@ -185,7 +147,7 @@ func (dbp *nativeProcess) Breakpoints() *proc.BreakpointMap {
 // sends SIGSTOP to all threads.
 func (dbp *nativeProcess) RequestManualStop() error {
 	if dbp.exited {
-		return proc.ErrProcessExited{Pid: dbp.Pid()}
+		return proc.ErrProcessExited{Pid: dbp.pid}
 	}
 	dbp.stopMu.Lock()
 	defer dbp.stopMu.Unlock()
@@ -242,7 +204,7 @@ func (dbp *nativeProcess) EraseBreakpoint(bp *proc.Breakpoint) error {
 // This could be the result of a breakpoint or signal.
 func (dbp *nativeProcess) ContinueOnce() (proc.Thread, proc.StopReason, error) {
 	if dbp.exited {
-		return nil, proc.StopExited, proc.ErrProcessExited{Pid: dbp.Pid()}
+		return nil, proc.StopExited, proc.ErrProcessExited{Pid: dbp.pid}
 	}
 
 	for {
@@ -303,12 +265,25 @@ func (dbp *nativeProcess) initialize(path string, debugInfoDirs []string) (*proc
 	if !dbp.childProcess {
 		stopReason = proc.StopAttached
 	}
-	tgt, err := proc.NewTarget(dbp, dbp.memthread, proc.NewTargetConfig{
-		Path:                path,
-		DebugInfoDirs:       debugInfoDirs,
-		DisableAsyncPreempt: runtime.GOOS == "windows" || runtime.GOOS == "freebsd",
-		StopReason:          stopReason,
-		CanDump:             runtime.GOOS == "linux"})
+	tgt, err := proc.NewTarget(dbp, dbp.pid, dbp.memthread, proc.NewTargetConfig{
+		Path:          path,
+		DebugInfoDirs: debugInfoDirs,
+
+		// We disable asyncpreempt for the following reasons:
+		//  - on Windows asyncpreempt is incompatible with debuggers, see:
+		//    https://github.com/golang/go/issues/36494
+		//  - freebsd's backend is generally broken and asyncpreempt makes it even more so, see:
+		//    https://github.com/go-delve/delve/issues/1754
+		//  - on linux/arm64 asyncpreempt can sometimes restart a sequence of
+		//    instructions, if the sequence happens to contain a breakpoint it will
+		//    look like the breakpoint was hit twice when it was "logically" only
+		//    executed once.
+		//    See: https://go-review.googlesource.com/c/go/+/208126
+		DisableAsyncPreempt: runtime.GOOS == "windows" || runtime.GOOS == "freebsd" || (runtime.GOOS == "linux" && runtime.GOARCH == "arm64"),
+
+		StopReason: stopReason,
+		CanDump:    runtime.GOOS == "linux" || runtime.GOOS == "windows",
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +318,7 @@ func (dbp *nativeProcess) postExit() {
 	if dbp.ctty != nil {
 		dbp.ctty.Close()
 	}
+	dbp.os.Close()
 }
 
 func (dbp *nativeProcess) writeSoftwareBreakpoint(thread *nativeThread, addr uint64) error {

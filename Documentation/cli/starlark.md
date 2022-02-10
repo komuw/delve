@@ -20,12 +20,14 @@ Function | API Call
 amend_breakpoint(Breakpoint) | Equivalent to API call [AmendBreakpoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.AmendBreakpoint)
 ancestors(GoroutineID, NumAncestors, Depth) | Equivalent to API call [Ancestors](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.Ancestors)
 attached_to_existing_process() | Equivalent to API call [AttachedToExistingProcess](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.AttachedToExistingProcess)
+build_id() | Equivalent to API call [BuildID](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.BuildID)
 cancel_next() | Equivalent to API call [CancelNext](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.CancelNext)
 checkpoint(Where) | Equivalent to API call [Checkpoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.Checkpoint)
 clear_breakpoint(Id, Name) | Equivalent to API call [ClearBreakpoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.ClearBreakpoint)
 clear_checkpoint(ID) | Equivalent to API call [ClearCheckpoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.ClearCheckpoint)
 raw_command(Name, ThreadID, GoroutineID, ReturnInfoLoadConfig, Expr, UnsafeCall) | Equivalent to API call [Command](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.Command)
 create_breakpoint(Breakpoint) | Equivalent to API call [CreateBreakpoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.CreateBreakpoint)
+create_ebpf_tracepoint(FunctionName) | Equivalent to API call [CreateEBPFTracepoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.CreateEBPFTracepoint)
 create_watchpoint(Scope, Expr, Type) | Equivalent to API call [CreateWatchpoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.CreateWatchpoint)
 detach(Kill) | Equivalent to API call [Detach](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.Detach)
 disassemble(Scope, StartPC, EndPC, Flavour) | Equivalent to API call [Disassemble](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.Disassemble)
@@ -37,10 +39,11 @@ examine_memory(Address, Length) | Equivalent to API call [ExamineMemory](https:/
 find_location(Scope, Loc, IncludeNonExecutableLines, SubstitutePathRules) | Equivalent to API call [FindLocation](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.FindLocation)
 function_return_locations(FnName) | Equivalent to API call [FunctionReturnLocations](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.FunctionReturnLocations)
 get_breakpoint(Id, Name) | Equivalent to API call [GetBreakpoint](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.GetBreakpoint)
+get_buffered_tracepoints() | Equivalent to API call [GetBufferedTracepoints](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.GetBufferedTracepoints)
 get_thread(Id) | Equivalent to API call [GetThread](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.GetThread)
 is_multiclient() | Equivalent to API call [IsMulticlient](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.IsMulticlient)
 last_modified() | Equivalent to API call [LastModified](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.LastModified)
-breakpoints() | Equivalent to API call [ListBreakpoints](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.ListBreakpoints)
+breakpoints(All) | Equivalent to API call [ListBreakpoints](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.ListBreakpoints)
 checkpoints() | Equivalent to API call [ListCheckpoints](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.ListCheckpoints)
 dynamic_libraries() | Equivalent to API call [ListDynamicLibraries](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.ListDynamicLibraries)
 function_args(Scope, Cfg) | Equivalent to API call [ListFunctionArgs](https://godoc.org/github.com/go-delve/delve/service/rpc2#RPCServer.ListFunctionArgs)
@@ -150,7 +153,7 @@ def main():
 Use it like this:
 
 ```
-(dlv) source goroutine_start_line.start
+(dlv) source goroutine_start_line.star
 (dlv) goroutine_start_line
 1 	 /usr/local/go/src/runtime/proc.go:110 	 func main() {
 2 	 /usr/local/go/src/runtime/proc.go:242 	 func forcegchelper() {

@@ -1,7 +1,199 @@
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
+
+## [1.8.1] 2021-02-07
+
+### Added
+
+- Downloading source code listings with debuginfod (@Foxboron)
+- Added `transcript` command (@aarzilli)
+- Enabled `dump` command on windows (@aarzilli)
+- Env attribute in DAP launch requests (@hyangah)
+- Better documentation for the DAP interface (@polinasok)
+
+### Fixed
+
+- Require argument for trace subcommand (@derekparker)
+- Handling of inlined calls within inlined calls (@derekparker)
+- Handling of DW_AT_inline attribute (@aarzilli)
+- Set stop reason in StepInstruction (@suzmue)
+
+### Changed
+
+- The DAP interface will not create executables in the temp directory (@hyangah)
+- When the `goroutines` command looks for the user frame it will exclude frames in internal and runtime/internal in addition to private runtime functions (@aarzilli)
+- Breakpoints with hitcount conditions are automatically disabled when their condition can no longer be satisfied (@pippolo84)
+- The commands `break` and `trace` will set a breakpoint on the current line if no argument is specified (@thockin)
+- Miscellaneous documentation improvements (@chainhelen, @gareth-rees, @polinasok)
+
+## [1.8.0] 2021-12-23
+
+### Added
+
+* Go 1.18 support
+* Support for DWARF5 on Windows/MacOS (@aarzilli)
+* Added more installation instructions to documentation (@polinasok)
+* Allow for rewind to work after process exit with RR backend (@aarzilli)
+* Added documentation on runtime.curg and runtime.frameoff in eval (@aarzilli)
+* DAP: Expose sources command in evaluate request (@suzmue)
+* DAP: Support Goroutine filters (@suzmue)
+
+### Fixed
+
+* Fix build version using buildinfo (@aarzilli)
+* Fix crash when using deferred with no args (@kaddy-tom)
+* DAP: Misc remote attach improvements (@polinasok)
+
+### Changed
+
+* Misc cleanup and refactoring (@aarzilli)
+* Added option to disable invoking git during build (@herbygillot)
+* Ignore 'pf' mappings during core dump creation (@aarzilli)
+
+## [1.7.3] 2021-11-16
+
+### Added
+
+* Misc changes to prepare for Go 1.18 and generics (#2703, @2745, @aarzilli)
+* Watchpoint support (disabled on Windows) (#2651, #2659, #2667, #2769, @aarzilli)
+* Warn about listening to remote connections (#2721, @aarzilli)
+* Support call injection with rr backend (#2740, @aarzilli)
+* Support JSON-RPC and DAP on the same port from 'dlv debug/exec/test/attach' (#2755, @polinasok)
+* DAP: Remote attach support (#2709, @polinasok)
+* DAP: Multi-client support (#2731, #2737, #2781, @polinasok)
+* DAP: Logpoints support (#2634, #2730, #2747, #2748, @suzmue)
+* DAP: Dissasembly view support (#2713, #2716, #2728, #2742, @suzmue)
+* DAP: Support dlvCwd and use a temp file as default debug binary (#2660, #2734, @hyangah, @polinasok)
+* DAP: Auto-resume execution when setting breakpoints while running (#2726, @suzmue)
+* DAP: Add --client-addr flag to run dap with a predefined client (#2568, @hyangah)
+* DAP: Log parsed and applied launch configs (#2732, @polinasok)
+* DAP: Add option to hide system goroutines (#2743, @suzmue)
+* DAP: Add support for special 'config' expressions (#2750, @suzmue)
+
+### Fixed
+
+* Return correct exit status from Halt command (#2674, @suzmue)
+* Merge register data before writing to register (#2699, @mknyszek)
+* Do not assign temp breakpoint IDs to avoid conflicts with user breakpoints (#2650, @aarzilli)
+* Miscellaneous fixes for Windows native backend (#2736, @aarzilli)
+* Return error when assigning between function variables (#2692, @aarzilli)
+* Obey logflags config for LoadConfig warnings (#2701, @aarzilli, @suzmue)
+* Workaround for debugserver register set bug (#2770, @aarzilli)
+* DAP: Fix nil dereference when byte array cannot be converted to string (#2733, @polinasok)
+* DAP: Fix data race for noDebugProcess.ProcessState (#2735, @polinasok)
+
+### Changed
+
+* Refine handling of version-too-old errors (#2684, #2712, @polinasok, @yang-wei)
+* eBPF tracing backend return value parsing (#2704, @derekparker)
+* Replace libbpfgo with cilium/ebpf (##2771, @derekparker)
+* DAP: Merge Arguments and Locals scopes (#2717, @suzmue)
+* DAP: Refine launch/attach error visibility (#2671, @polinasok)
+* DAP: Server refactoring to separate listener and client session layers (#2729, @polinasok)
+* DAP: Improve shutdown logic and test coverage (#2749, @polinasok)
+
+## [1.7.2] 2021-09-21
+
+### Added
+
+* Documentation: Add notes on porting Delve to other architectures (@aarzilli)
+* Add internal checks to ensure we're synched with Go runtime internals (@aarzilli)
+* eBPF backend can parse goroutine info (@derekparker)
+* Add support for debuginfo-find (@derekparker)
+* Add MAKE arguments for GOOS / GOARCH (@cmol)
+
+### Fixed
+
+* Correctly check for 1.17 and regabi (@aarzilli)
+* Print config output strings quouted (@aarzilli, @krobelus)
+* Update check for system goroutines (@suzmue)
+* DAP: Halt before detach in Stop (@polinasok)
+* DAP: Do not send halt request if debuggee is not running (@suzmue)
+
+### Changed
+
+* Include selected goroutine in threads request (@suzmue)
+* Remove individual OS install instructions (@gabriel-vasile)
+* DAP: Show decimal / hex values for uint (@suzmue)
+* Avoid bright colors in default syntax highlighting (@krobelus)
+
+## [1.7.1] 2021-08-18
+
+### Added
+
+- *EXPERIMENTAL* Added support for eBPF based trace backend (@derekparker)
+- Added fuzzy completion for the CLI for commands and breakpoint locations (@derekparker)
+- Added stack watchpoints (@aarzilli)
+- Added verbose version output (@hyangah)
+- DAP: Support for replay and core modes (@Iggomez)
+- DAP: Added ability to page stack frames (@suzmue)
+- DAP: Added len as metadata for maps (@suzmue)
+- DAP: Add 'backend' launch/attach attribute (@polinasok)
+
+### Fixed
+
+- Fix handling of runtime throws (@derekparker)
+- DAP: Handle unexpected debugger termination (@polinasok)
+
+### Changed
+
+- Added configuration for Target to not clear stepping breakpoints (@suzmue)
+- Ignore existing breakpoints for continue-until (@derekparker)
+- Improve help output for examinemem (@derekparker)
+- Clarify next-while-nexting error (@suzmue)
+- DWARF improvements for additional opcodes (@aarzilli)
+- Treat SIGTERM as server disconnect signal (@polinasok)
+- Update Cobra lib to v1.1.3 (@hyangah)
+- Improvements to 'on' command (@aarzilli)
+- Terminal will now prompt when breakpoint is hit during next/step/stepout (@aarzilli)
+- DAP: Ensure server is always headless and target foregrounded (@polinasok)
+- DAP: Set hit breakpoint IDs (@suzmue)
+
+## [1.7.0] 2021-07-19
+
+### Added
+
+- Go 1.17 support (@aarzilli, @mknyszek)
+- Add new API and terminal command for setting watchpoints (@aarzilli)
+- Add filtering and grouping to goroutines command (@aarzilli)
+- Added support for hit count condition on breakpoints (@suzmue, @aarzilli)
+- DAP server: Handle SetVariable requests (@hyangah)
+- DAP server: Add clipboard support (@hyangah)
+
+### Fixed
+
+- DAP server: Several shutdown / disconnect fixes (@suzmue, @polinasok)
+- DAP server: Clean output executable name on Windows (@hyangah)
+- DAP server: Variables response must not have null variables array (@polinasok)
+- Fix runtimeTypeToDIE setup (necessary for Go 1.17) (@aarzilli)
+- Reenable CGO stacktrace test on arm64 (@derekparker)
+- Fix incorrect integer casts in freebsd C backend (@dwagin)
+- Ensure correct exit status reported on commands following process death (@derekparker)
+- Misc flakey test fixes / test refactoring (@polinasok)
+- Fix for frame parameter being ignored in ConvertEvalScope when no goroutine is found (@suzmue)
+- Ensure ContinueOnce returns StopExited if process exited, otherwise return StopUnknown (@polinasok)
+- Fix panic in RPC2.ListDynamicLibraries (@derekparker)
+- Fix typo in flag passed to check if debugserver supports unmask_signals (@staugust)
+
+### Changed
+
+- DAP server: Add sameuser security check (@hyangah)
+- DAP server: Changes to context-dependent load limits for string type (@hyangah, @polinasok)
+- DAP server: Add paging for arrays, slices and maps (@suzmue)
+- DAP server: Deemphasize internal runtime stack frames (@suzmue)
+- DAP server: Add throw reason to exception information upon panic (@suzmue)
+- DAP server: Set breakpoint hit ID (@suzmue)
+- DAP server: Add string value of byte/rune slice as child (@suzmue)
+- Documentation: Add viminspector to list of editor plugins (@aarzilli)
+- Support for ZMM registers in gdbserial backend (@aarzilli)
+- Remove support for stack barriers (@derekparker)
+- Improve support for DWARF5 (@derekparker)
+- Improve documentation (@derekparker, @aarzilli)
+- Print message and exit if Delve detects it is running under Rosetta on M1 macs (@aarzilli)
+- Drop official Go 1.14 support (@derekparker)
 
 ## [1.6.1] 2021-05-18
 

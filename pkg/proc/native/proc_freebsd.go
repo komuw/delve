@@ -15,6 +15,7 @@ import (
 	sys "golang.org/x/sys/unix"
 
 	"github.com/go-delve/delve/pkg/proc"
+	"github.com/go-delve/delve/pkg/proc/internal/ebpf"
 
 	isatty "github.com/mattn/go-isatty"
 )
@@ -36,6 +37,8 @@ type osProcessDetails struct {
 	comm string
 	tid  int
 }
+
+func (os *osProcessDetails) Close() {}
 
 // Launch creates and begins debugging a new process. First entry in
 // `cmd` is the program to run, and then rest are the arguments
@@ -349,7 +352,7 @@ func (dbp *nativeProcess) resume() error {
 // stop stops all running threads and sets breakpoints
 func (dbp *nativeProcess) stop(trapthread *nativeThread) (*nativeThread, error) {
 	if dbp.exited {
-		return nil, proc.ErrProcessExited{Pid: dbp.Pid()}
+		return nil, proc.ErrProcessExited{Pid: dbp.pid}
 	}
 	// set breakpoints on all threads
 	for _, th := range dbp.threads {
@@ -372,6 +375,18 @@ func (dbp *nativeProcess) detach(kill bool) error {
 func (dbp *nativeProcess) EntryPoint() (uint64, error) {
 	ep, err := C.get_entry_point(C.int(dbp.pid))
 	return uint64(ep), err
+}
+
+func (dbp *nativeProcess) SupportsBPF() bool {
+	return false
+}
+
+func (dbp *nativeProcess) SetUProbe(fnName string, goidOffset int64, args []ebpf.UProbeArgMap) error {
+	panic("not implemented")
+}
+
+func (dbp *nativeProcess) GetBufferedTracepoints() []ebpf.RawUProbeParams {
+	panic("not implemented")
 }
 
 // Usedy by Detach

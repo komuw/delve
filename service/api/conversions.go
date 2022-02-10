@@ -20,35 +20,39 @@ import (
 // an api.Breakpoint.
 func ConvertBreakpoint(bp *proc.Breakpoint) *Breakpoint {
 	b := &Breakpoint{
-		Name:          bp.Name,
-		ID:            bp.LogicalID,
-		FunctionName:  bp.FunctionName,
-		File:          bp.File,
-		Line:          bp.Line,
-		Addr:          bp.Addr,
-		Tracepoint:    bp.Tracepoint,
-		TraceReturn:   bp.TraceReturn,
-		Stacktrace:    bp.Stacktrace,
-		Goroutine:     bp.Goroutine,
-		Variables:     bp.Variables,
-		LoadArgs:      LoadConfigFromProc(bp.LoadArgs),
-		LoadLocals:    LoadConfigFromProc(bp.LoadLocals),
-		WatchExpr:     bp.WatchExpr,
-		WatchType:     WatchType(bp.WatchType),
-		TotalHitCount: bp.TotalHitCount,
-		Addrs:         []uint64{bp.Addr},
+		Name:         bp.Name,
+		ID:           bp.LogicalID(),
+		FunctionName: bp.FunctionName,
+		File:         bp.File,
+		Line:         bp.Line,
+		Addr:         bp.Addr,
+		Tracepoint:   bp.Tracepoint,
+		TraceReturn:  bp.TraceReturn,
+		Stacktrace:   bp.Stacktrace,
+		Goroutine:    bp.Goroutine,
+		Variables:    bp.Variables,
+		LoadArgs:     LoadConfigFromProc(bp.LoadArgs),
+		LoadLocals:   LoadConfigFromProc(bp.LoadLocals),
+		WatchExpr:    bp.WatchExpr,
+		WatchType:    WatchType(bp.WatchType),
+		Addrs:        []uint64{bp.Addr},
+		UserData:     bp.UserData,
 	}
 
-	b.HitCount = map[string]uint64{}
-	for idx := range bp.HitCount {
-		b.HitCount[strconv.Itoa(idx)] = bp.HitCount[idx]
-	}
+	breaklet := bp.UserBreaklet()
+	if breaklet != nil {
+		b.TotalHitCount = breaklet.TotalHitCount
+		b.HitCount = map[string]uint64{}
+		for idx := range breaklet.HitCount {
+			b.HitCount[strconv.Itoa(idx)] = breaklet.HitCount[idx]
+		}
 
-	var buf bytes.Buffer
-	printer.Fprint(&buf, token.NewFileSet(), bp.Cond)
-	b.Cond = buf.String()
-	if bp.HitCond != nil {
-		b.HitCond = fmt.Sprintf("%s %d", bp.HitCond.Op.String(), bp.HitCond.Val)
+		var buf bytes.Buffer
+		printer.Fprint(&buf, token.NewFileSet(), breaklet.Cond)
+		b.Cond = buf.String()
+		if breaklet.HitCond != nil {
+			b.HitCond = fmt.Sprintf("%s %d", breaklet.HitCond.Op.String(), breaklet.HitCond.Val)
+		}
 	}
 
 	return b
@@ -62,18 +66,35 @@ func ConvertBreakpoints(bps []*proc.Breakpoint) []*Breakpoint {
 		return nil
 	}
 	r := make([]*Breakpoint, 0, len(bps))
+	lg := false
 	for _, bp := range bps {
 		if len(r) > 0 {
-			if r[len(r)-1].ID == bp.LogicalID {
+			if r[len(r)-1].ID == bp.LogicalID() {
 				r[len(r)-1].Addrs = append(r[len(r)-1].Addrs, bp.Addr)
+				if r[len(r)-1].FunctionName != bp.FunctionName && r[len(r)-1].FunctionName != "" {
+					if !lg {
+						r[len(r)-1].FunctionName = removeTypeParams(r[len(r)-1].FunctionName)
+						lg = true
+					}
+					fn := removeTypeParams(bp.FunctionName)
+					if r[len(r)-1].FunctionName != fn {
+						r[len(r)-1].FunctionName = "(multiple functions)"
+					}
+				}
 				continue
-			} else if r[len(r)-1].ID > bp.LogicalID {
+			} else if r[len(r)-1].ID > bp.LogicalID() {
 				panic("input not sorted")
 			}
 		}
 		r = append(r, ConvertBreakpoint(bp))
+		lg = false
 	}
 	return r
+}
+
+func removeTypeParams(name string) string {
+	fn := proc.Function{Name: name}
+	return fn.NameWithoutTypeParams()
 }
 
 // ConvertThread converts a proc.Thread into an

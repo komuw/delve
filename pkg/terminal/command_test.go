@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -51,52 +53,28 @@ type FakeTerminal struct {
 const logCommandOutput = false
 
 func (ft *FakeTerminal) Exec(cmdstr string) (outstr string, err error) {
-	outfh, err := ioutil.TempFile("", "cmdtestout")
-	if err != nil {
-		ft.t.Fatalf("could not create temporary file: %v", err)
-	}
-
-	stdout, stderr, termstdout := os.Stdout, os.Stderr, ft.Term.stdout
-	os.Stdout, os.Stderr, ft.Term.stdout = outfh, outfh, outfh
-	defer func() {
-		os.Stdout, os.Stderr, ft.Term.stdout = stdout, stderr, termstdout
-		outfh.Close()
-		outbs, err1 := ioutil.ReadFile(outfh.Name())
-		if err1 != nil {
-			ft.t.Fatalf("could not read temporary output file: %v", err)
-		}
-		outstr = string(outbs)
-		if logCommandOutput {
-			ft.t.Logf("command %q -> %q", cmdstr, outstr)
-		}
-		os.Remove(outfh.Name())
-	}()
+	var buf bytes.Buffer
+	ft.Term.stdout.w = &buf
+	ft.Term.starlarkEnv.Redirect(ft.Term.stdout)
 	err = ft.cmds.Call(cmdstr, ft.Term)
+	outstr = buf.String()
+	if logCommandOutput {
+		ft.t.Logf("command %q -> %q", cmdstr, outstr)
+	}
+	ft.Term.stdout.Flush()
 	return
 }
 
 func (ft *FakeTerminal) ExecStarlark(starlarkProgram string) (outstr string, err error) {
-	outfh, err := ioutil.TempFile("", "cmdtestout")
-	if err != nil {
-		ft.t.Fatalf("could not create temporary file: %v", err)
-	}
-
-	stdout, stderr, termstdout := os.Stdout, os.Stderr, ft.Term.stdout
-	os.Stdout, os.Stderr, ft.Term.stdout = outfh, outfh, outfh
-	defer func() {
-		os.Stdout, os.Stderr, ft.Term.stdout = stdout, stderr, termstdout
-		outfh.Close()
-		outbs, err1 := ioutil.ReadFile(outfh.Name())
-		if err1 != nil {
-			ft.t.Fatalf("could not read temporary output file: %v", err)
-		}
-		outstr = string(outbs)
-		if logCommandOutput {
-			ft.t.Logf("command %q -> %q", starlarkProgram, outstr)
-		}
-		os.Remove(outfh.Name())
-	}()
+	var buf bytes.Buffer
+	ft.Term.stdout.w = &buf
+	ft.Term.starlarkEnv.Redirect(ft.Term.stdout)
 	_, err = ft.Term.starlarkEnv.Execute("<stdin>", starlarkProgram, "main", nil)
+	outstr = buf.String()
+	if logCommandOutput {
+		ft.t.Logf("command %q -> %q", starlarkProgram, outstr)
+	}
+	ft.Term.stdout.Flush()
 	return
 }
 
@@ -177,7 +155,7 @@ func withTestTerminalBuildFlags(name string, t testing.TB, buildFlags test.Build
 func TestCommandDefault(t *testing.T) {
 	var (
 		cmds = Commands{}
-		cmd  = cmds.Find("non-existant-command", noPrefix)
+		cmd  = cmds.Find("non-existant-command", noPrefix).cmdFn
 	)
 
 	err := cmd(nil, callContext{}, "")
@@ -193,7 +171,7 @@ func TestCommandDefault(t *testing.T) {
 func TestCommandReplayWithoutPreviousCommand(t *testing.T) {
 	var (
 		cmds = DebugCommands(nil)
-		cmd  = cmds.Find("", noPrefix)
+		cmd  = cmds.Find("", noPrefix).cmdFn
 		err  = cmd(nil, callContext{}, "")
 	)
 
@@ -205,7 +183,7 @@ func TestCommandReplayWithoutPreviousCommand(t *testing.T) {
 func TestCommandThread(t *testing.T) {
 	var (
 		cmds = DebugCommands(nil)
-		cmd  = cmds.Find("thread", noPrefix)
+		cmd  = cmds.Find("thread", noPrefix).cmdFn
 	)
 
 	err := cmd(nil, callContext{}, "")
@@ -330,6 +308,11 @@ func TestScopePrefix(t *testing.T) {
 	const goroutinesCurLinePrefix = "* Goroutine "
 	test.AllowRecording(t)
 
+	lenient := 0
+	if runtime.GOOS == "windows" {
+		lenient = 1
+	}
+
 	withTestTerminal("goroutinestackprog", t, func(term *FakeTerminal) {
 		term.MustExec("b stacktraceme")
 		term.MustExec("continue")
@@ -382,7 +365,7 @@ func TestScopePrefix(t *testing.T) {
 					}
 				}
 			}
-			if len(agoroutines)+extraAgoroutines < 10 {
+			if len(agoroutines)+extraAgoroutines < 10-lenient {
 				t.Fatalf("Output of goroutines did not have 10 goroutines stopped on main.agoroutine (%d+%d found): %q", len(agoroutines), extraAgoroutines, goroutinesOut)
 			}
 		}
@@ -396,6 +379,7 @@ func TestScopePrefix(t *testing.T) {
 			stackOut := strings.Split(term.MustExec(fmt.Sprintf("goroutine %d stack", gid)), "\n")
 			fid := -1
 			for _, line := range stackOut {
+				line = strings.TrimLeft(line, " ")
 				space := strings.Index(line, " ")
 				if space < 0 {
 					continue
@@ -411,7 +395,7 @@ func TestScopePrefix(t *testing.T) {
 				}
 			}
 			if fid < 0 {
-				t.Fatalf("Could not find frame for goroutine %d: %v", gid, stackOut)
+				t.Fatalf("Could not find frame for goroutine %d: %q", gid, stackOut)
 			}
 			term.AssertExec(fmt.Sprintf("goroutine     %d    frame     %d     locals", gid, fid), "(no locals)\n")
 			argsOut := strings.Split(term.MustExec(fmt.Sprintf("goroutine %d frame %d args", gid, fid)), "\n")
@@ -428,7 +412,11 @@ func TestScopePrefix(t *testing.T) {
 
 		for i := range seen {
 			if !seen[i] {
-				t.Fatalf("goroutine %d not found", i)
+				if lenient > 0 {
+					lenient--
+				} else {
+					t.Fatalf("goroutine %d not found", i)
+				}
 			}
 		}
 
@@ -473,6 +461,10 @@ func TestOnPrefix(t *testing.T) {
 	}
 	const prefix = "\ti: "
 	test.AllowRecording(t)
+	lenient := false
+	if runtime.GOOS == "windows" {
+		lenient = true
+	}
 	withTestTerminal("goroutinestackprog", t, func(term *FakeTerminal) {
 		term.MustExec("b agobp main.agoroutine")
 		term.MustExec("on agobp print i")
@@ -506,7 +498,11 @@ func TestOnPrefix(t *testing.T) {
 
 		for i := range seen {
 			if !seen[i] {
-				t.Fatalf("Goroutine %d not seen\n", i)
+				if lenient {
+					lenient = false
+				} else {
+					t.Fatalf("Goroutine %d not seen\n", i)
+				}
 			}
 		}
 	})
@@ -579,47 +575,6 @@ func countOccurrences(s, needle string) int {
 		s = s[idx+len(needle):]
 	}
 	return count
-}
-
-func TestIssue387(t *testing.T) {
-	if runtime.GOOS == "freebsd" {
-		t.Skip("test is not valid on FreeBSD")
-	}
-	// a breakpoint triggering during a 'next' operation will interrupt it
-	test.AllowRecording(t)
-	withTestTerminal("issue387", t, func(term *FakeTerminal) {
-		breakpointHitCount := 0
-		term.MustExec("break dostuff")
-		for {
-			outstr, err := term.Exec("continue")
-			breakpointHitCount += countOccurrences(outstr, "issue387.go:8")
-			t.Log(outstr)
-			if err != nil {
-				if !strings.Contains(err.Error(), "exited") {
-					t.Fatalf("Unexpected error executing 'continue': %v", err)
-				}
-				break
-			}
-
-			pos := 9
-
-			for {
-				outstr = term.MustExec("next")
-				breakpointHitCount += countOccurrences(outstr, "issue387.go:8")
-				t.Log(outstr)
-				if countOccurrences(outstr, fmt.Sprintf("issue387.go:%d", pos)) == 0 {
-					t.Fatalf("did not continue to expected position %d", pos)
-				}
-				pos++
-				if pos >= 11 {
-					break
-				}
-			}
-		}
-		if breakpointHitCount != 10 {
-			t.Fatalf("Breakpoint hit wrong number of times, expected 10 got %d", breakpointHitCount)
-		}
-	})
 }
 
 func listIsAt(t *testing.T, term *FakeTerminal, listcmd string, cur, start, end int) {
@@ -1170,6 +1125,18 @@ func TestContinueUntil(t *testing.T) {
 	})
 }
 
+func TestContinueUntilExistingBreakpoint(t *testing.T) {
+	withTestTerminal("continuetestprog", t, func(term *FakeTerminal) {
+		term.MustExec("break main.main")
+		if runtime.GOARCH != "386" {
+			listIsAt(t, term, "continue main.main", 16, -1, -1)
+		} else {
+			listIsAt(t, term, "continue main.main", 17, -1, -1)
+		}
+		listIsAt(t, term, "continue main.sayhi", 12, -1, -1)
+	})
+}
+
 func TestPrintFormat(t *testing.T) {
 	withTestTerminal("testvariables2", t, func(term *FakeTerminal) {
 		term.MustExec("continue")
@@ -1190,5 +1157,137 @@ func TestHitCondBreakpoint(t *testing.T) {
 		if !strings.Contains(out, "3\n") {
 			t.Fatalf("wrong value of i")
 		}
+	})
+}
+
+func TestBreakpointEditing(t *testing.T) {
+	term := &FakeTerminal{
+		t:    t,
+		Term: New(nil, &config.Config{}),
+	}
+	_ = term
+
+	var testCases = []struct {
+		inBp    *api.Breakpoint
+		inBpStr string
+		edit    string
+		outBp   *api.Breakpoint
+	}{
+		{ // tracepoint -> breakpoint
+			&api.Breakpoint{Tracepoint: true},
+			"trace",
+			"",
+			&api.Breakpoint{}},
+		{ // breakpoint -> tracepoint
+			&api.Breakpoint{Variables: []string{"a"}},
+			"print a",
+			"print a\ntrace",
+			&api.Breakpoint{Tracepoint: true, Variables: []string{"a"}}},
+		{ // add print var
+			&api.Breakpoint{Variables: []string{"a"}},
+			"print a",
+			"print b\nprint a\n",
+			&api.Breakpoint{Variables: []string{"b", "a"}}},
+		{ // add goroutine flag
+			&api.Breakpoint{},
+			"",
+			"goroutine",
+			&api.Breakpoint{Goroutine: true}},
+		{ // remove goroutine flag
+			&api.Breakpoint{Goroutine: true},
+			"goroutine",
+			"",
+			&api.Breakpoint{}},
+		{ // add stack directive
+			&api.Breakpoint{},
+			"",
+			"stack 10",
+			&api.Breakpoint{Stacktrace: 10}},
+		{ // remove stack directive
+			&api.Breakpoint{Stacktrace: 20},
+			"stack 20",
+			"print a",
+			&api.Breakpoint{Variables: []string{"a"}}},
+		{ // add condition
+			&api.Breakpoint{Variables: []string{"a"}},
+			"print a",
+			"print a\ncond a < b",
+			&api.Breakpoint{Variables: []string{"a"}, Cond: "a < b"}},
+		{ // remove condition
+			&api.Breakpoint{Cond: "a < b"},
+			"cond a < b",
+			"",
+			&api.Breakpoint{}},
+		{ // change condition
+			&api.Breakpoint{Cond: "a < b"},
+			"cond a < b",
+			"cond a < 5",
+			&api.Breakpoint{Cond: "a < 5"}},
+		{ // change hitcount condition
+			&api.Breakpoint{HitCond: "% 2"},
+			"cond -hitcount % 2",
+			"cond -hitcount = 2",
+			&api.Breakpoint{HitCond: "= 2"}},
+	}
+
+	for _, tc := range testCases {
+		bp := *tc.inBp
+		bpStr := strings.Join(formatBreakpointAttrs("", &bp, true), "\n")
+		if bpStr != tc.inBpStr {
+			t.Errorf("Expected %q got %q for:\n%#v", tc.inBpStr, bpStr, tc.inBp)
+		}
+		ctx := callContext{Prefix: onPrefix, Scope: api.EvalScope{GoroutineID: -1, Frame: 0, DeferredCall: 0}, Breakpoint: &bp}
+		err := term.cmds.parseBreakpointAttrs(nil, ctx, strings.NewReader(tc.edit))
+		if err != nil {
+			t.Errorf("Unexpected error during edit %q", tc.edit)
+		}
+		if !reflect.DeepEqual(bp, *tc.outBp) {
+			t.Errorf("mismatch after edit\nexpected: %#v\ngot: %#v", tc.outBp, bp)
+		}
+	}
+}
+
+func TestTranscript(t *testing.T) {
+	withTestTerminal("math", t, func(term *FakeTerminal) {
+		term.MustExec("break main.main")
+		out := term.MustExec("continue")
+		if !strings.HasPrefix(out, "> main.main()") {
+			t.Fatalf("Wrong output for next: <%s>", out)
+		}
+		fh, err := ioutil.TempFile("", "test-transcript-*")
+		if err != nil {
+			t.Fatalf("TempFile: %v", err)
+		}
+		name := fh.Name()
+		fh.Close()
+		t.Logf("output to %q", name)
+
+		slurp := func() string {
+			b, err := ioutil.ReadFile(name)
+			if err != nil {
+				t.Fatalf("could not read transcript file: %v", err)
+			}
+			return string(b)
+		}
+
+		term.MustExec(fmt.Sprintf("transcript %s", name))
+		out = term.MustExec("list")
+		//term.MustExec("transcript -off")
+		if out != slurp() {
+			t.Logf("output of list %s", out)
+			t.Logf("contents of transcript: %s", slurp())
+			t.Errorf("transcript and command out differ")
+		}
+
+		term.MustExec(fmt.Sprintf("transcript -t -x %s", name))
+		out = term.MustExec(`print "hello"`)
+		if out != "" {
+			t.Errorf("output of print is %q but should have been suppressed by transcript", out)
+		}
+		if slurp() != "\"hello\"\n" {
+			t.Errorf("wrong contents of transcript: %q", slurp())
+		}
+
+		os.Remove(name)
 	})
 }

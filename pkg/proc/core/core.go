@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/go-delve/delve/pkg/elfwriter"
 	"github.com/go-delve/delve/pkg/dwarf/op"
+	"github.com/go-delve/delve/pkg/elfwriter"
 	"github.com/go-delve/delve/pkg/proc"
+	"github.com/go-delve/delve/pkg/proc/internal/ebpf"
 )
 
 // ErrNoThreads core file did not contain any threads.
@@ -163,8 +164,6 @@ type process struct {
 	breakpoints proc.BreakpointMap
 }
 
-var _ proc.ProcessInternal = &process{}
-
 // thread represents a thread in the core file being debugged.
 type thread struct {
 	th     osThread
@@ -221,7 +220,7 @@ func OpenCore(corePath, exePath string, debugInfoDirs []string) (*proc.Target, e
 		return nil, ErrNoThreads
 	}
 
-	return proc.NewTarget(p, currentThread, proc.NewTargetConfig{
+	return proc.NewTarget(p, p.pid, currentThread, proc.NewTargetConfig{
 		Path:                exePath,
 		DebugInfoDirs:       debugInfoDirs,
 		DisableAsyncPreempt: false,
@@ -268,6 +267,25 @@ func (p *process) Checkpoints() ([]proc.Checkpoint, error) { return nil, nil }
 
 // ClearCheckpoint clears a checkpoint, but will only return an error for core files.
 func (p *process) ClearCheckpoint(int) error { return errors.New("checkpoint not found") }
+
+func (p *process) SupportsBPF() bool {
+	return false
+}
+
+func (dbp *process) SetUProbe(fnName string, goidOffset int64, args []ebpf.UProbeArgMap) error {
+	panic("not implemented")
+}
+
+// StartCallInjection notifies the backend that we are about to inject a function call.
+func (p *process) StartCallInjection() (func(), error) { return func() {}, nil }
+
+func (dbp *process) EnableURetProbes() error {
+	panic("not implemented")
+}
+
+func (dbp *process) DisableURetProbes() error {
+	panic("not implemented")
+}
 
 // ReadMemory will return memory from the core file at the specified location and put the
 // read memory into `data`, returning the length read, and returning an error if
@@ -439,11 +457,6 @@ func (p *process) Valid() (bool, error) {
 	return true, nil
 }
 
-// Pid returns the process ID of this process.
-func (p *process) Pid() int {
-	return p.pid
-}
-
 // ResumeNotify is a no-op on core files as we cannot
 // control execution.
 func (p *process) ResumeNotify(chan<- struct{}) {
@@ -470,4 +483,8 @@ func (p *process) MemoryMap() ([]proc.MemoryMapEntry, error) {
 
 func (p *process) DumpProcessNotes(notes []elfwriter.Note, threadDone func()) (threadsDone bool, out []elfwriter.Note, err error) {
 	return false, notes, nil
+}
+
+func (dbp *process) GetBufferedTracepoints() []ebpf.RawUProbeParams {
+	return nil
 }

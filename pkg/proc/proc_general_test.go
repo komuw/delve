@@ -1,12 +1,12 @@
 package proc
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"unsafe"
 
-	"github.com/go-delve/delve/pkg/goversion"
 	protest "github.com/go-delve/delve/pkg/proc/test"
 )
 
@@ -122,13 +122,47 @@ func TestDwarfVersion(t *testing.T) {
 
 func TestRegabiFlagSentinel(t *testing.T) {
 	// Detect if the regabi flag in the producer string gets removed
-	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 17) || runtime.GOARCH != "amd64" {
+	if !protest.RegabiSupported() {
 		t.Skip("irrelevant before Go 1.17 or on non-amd64 architectures")
 	}
 	fixture := protest.BuildFixture("math", 0)
 	bi := NewBinaryInfo(runtime.GOOS, runtime.GOARCH)
 	assertNoError(bi.LoadBinaryInfo(fixture.Path, 0, nil), t, "LoadBinaryInfo")
 	if !bi.regabi {
-		t.Errorf("regabi flag not set")
+		t.Errorf("regabi flag not set %s GOEXPERIMENT=%s", runtime.Version(), os.Getenv("GOEXPERIMENT"))
+	}
+}
+
+func TestGenericFunctionParser(t *testing.T) {
+	// Normal parsing
+
+	var testCases = []struct{ name, pkg, rcv, base string }{
+		{"github.com/go-delve/delve.afunc", "github.com/go-delve/delve", "", "afunc"},
+		{"github.com/go-delve/delve..afunc", "github.com/go-delve/delve", "", "afunc"}, // malformed
+		{"github.com/go-delve/delve.afunc[some/[thing].el se]", "github.com/go-delve/delve", "", "afunc[some/[thing].el se]"},
+		{"github.com/go-delve/delve.Receiver.afunc", "github.com/go-delve/delve", "Receiver", "afunc"},
+		{"github.com/go-delve/delve.(*Receiver).afunc", "github.com/go-delve/delve", "(*Receiver)", "afunc"},
+		{"github.com/go-delve/delve.Receiver.afunc[some/[thing].el se]", "github.com/go-delve/delve", "Receiver", "afunc[some/[thing].el se]"},       // malformed
+		{"github.com/go-delve/delve.(*Receiver).afunc[some/[thing].el se]", "github.com/go-delve/delve", "(*Receiver)", "afunc[some/[thing].el se]"}, // malformed
+		{"github.com/go-delve/delve.Receiver[some/[thing].el se].afunc", "github.com/go-delve/delve", "Receiver[some/[thing].el se]", "afunc"},
+		{"github.com/go-delve/delve.(*Receiver[some/[thing].el se]).afunc", "github.com/go-delve/delve", "(*Receiver[some/[thing].el se])", "afunc"},
+
+		{"github.com/go-delve/delve.afunc[.some/[thing].el se]", "github.com/go-delve/delve", "", "afunc[.some/[thing].el se]"},
+		{"github.com/go-delve/delve.Receiver.afunc[.some/[thing].el se]", "github.com/go-delve/delve", "Receiver", "afunc[.some/[thing].el se]"}, // malformed
+		{"github.com/go-delve/delve.Receiver[.some/[thing].el se].afunc", "github.com/go-delve/delve", "Receiver[.some/[thing].el se]", "afunc"},
+		{"github.com/go-delve/delve.(*Receiver[.some/[thing].el se]).afunc", "github.com/go-delve/delve", "(*Receiver[.some/[thing].el se])", "afunc"},
+	}
+
+	for _, tc := range testCases {
+		fn := &Function{Name: tc.name}
+		if fn.PackageName() != tc.pkg {
+			t.Errorf("Package name mismatch: %q %q", tc.pkg, fn.PackageName())
+		}
+		if fn.ReceiverName() != tc.rcv {
+			t.Errorf("Receiver name mismatch: %q %q", tc.rcv, fn.ReceiverName())
+		}
+		if fn.BaseName() != tc.base {
+			t.Errorf("Base name mismatch: %q %q", tc.base, fn.BaseName())
+		}
 	}
 }
