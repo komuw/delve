@@ -10,7 +10,7 @@ import (
 
 /* How to run this demo:
 A. Get the code and drop inside a docker container.
-git clone git@github.com:go-delve/delve.git
+git clone git@github.com:komuw/delve.git
 cd delve
 git checkout issues/2249-A
 docker-compose run app
