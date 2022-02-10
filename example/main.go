@@ -23,7 +23,7 @@ go build -x -gcflags="all=-N -l" -ldflags='all=-linkshared' -o example/example e
 /go/bin/dlv exec example/example
 
 C. set breakpoint and execute various `whatis` commands
-break example/main.go:132
+break example/main.go:86
 (dlv) continue
 (dlv) whatis -v f
 (dlv) whatis -v hReq
