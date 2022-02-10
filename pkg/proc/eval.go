@@ -427,6 +427,7 @@ func (scope *EvalScope) setValue(dstv, srcv *Variable, srcExpr string) error {
 // GetPubApi returns the public API of the given variable
 //
 // For this method to work, the binary should be compile with -ldflags='all=-linkshared'
+// Note: There's a proposal by rsc to remove  -buildmode=shared https://github.com/golang/go/issues/47788
 // so as to disable dead code elimination
 func GetPubApi(v *Variable) (methods []string, fields []string) {
 
