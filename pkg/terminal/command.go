@@ -2004,7 +2004,7 @@ func whatisCommand(t *Term, ctx callContext, argstr string) error {
 		return fmt.Errorf("not enough arguments")
 	}
 
-	args := split2PartsBySpace(argstr)
+	args := config.Split2PartsBySpace(argstr)
 	typ := args[0]
 	verbose := false
 	if args[0] == "-v" {
